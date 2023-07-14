@@ -1,0 +1,107 @@
+# @package _group_
+
+common:
+  fp16: false
+  fp16_no_flatten_grads: true
+  log_format: json
+  log_interval: 100
+  tensorboard_logdir: ../0/tb
+  reset_logging: false
+  suppress_crashes: false
+
+checkpoint:
+  save_interval: 200
+  save_interval_updates: 200
+  no_epoch_checkpoints: true
+  best_checkpoint_metric: uer
+  save_dir: .
+
+distributed_training:
+  distributed_world_size: 1
+
+task:
+  _name: unpaired_audio_text
+  data: ???
+  text_data: ???
+  shuffle: False
+  labels: phn
+  sort_by_length: false
+  unfiltered: false
+  max_length: null
+  append_eos: false
+  kenlm_path: ???
+  random_choice: true
+
+dataset:
+  num_workers: 6
+  required_batch_size_multiple: 1 
+  batch_size: 160
+  skip_invalid_size_inputs_valid_test: true
+  valid_subset: valid
+  validate_interval: 1
+  validate_interval_updates: 20000
+
+criterion:
+  _name: model
+  log_keys:
+    - accuracy_dense
+    - accuracy_token
+    - temp
+    - code_ppl
+
+optimization:
+  max_update: 20000
+  clip_norm: 20.0
+  lr: [0.004]
+
+optimizer:
+  _name: adam 
+  adam_betas: [0.5,0.98]
+  adam_eps: 1e-06
+  weight_decay: 0
+  # amsgrad: false
+ 
+lr_scheduler:
+    _name: fixed
+    warmup_updates: 0
+
+model:
+  _name: wav2vecu_graph
+
+  skipgram_size: 6
+
+  discriminator_dim: 43
+  discriminator_depth: 0
+  discriminator_kernel: 43
+  discriminator_linear_emb: false
+  discriminator_causal: false
+  discriminator_max_pool: false
+  discriminator_act_after_linear: false
+  discriminator_dropout: 0.0
+  discriminator_weight_norm: false
+
+  generator_input_type: float
+  generator_stride: 1
+  generator_kernel: 1
+  generator_bias: false
+  generator_dropout: 0.1
+
+  quantizer_codebook_size: 1024
+  quantizer_weight: 0.0
+ 
+  smoothness_weight: 0.5
+  smoothing: 0
+  smoothing_one_sided: false
+  gumbel: false
+  hard_gumbel: false
+  gradient_penalty: 1.5
+  code_penalty: 4.0
+  temp: [ 2,0.1,0.99995 ]
+  input_dim: 512
+
+  segment_weight: 1.0
+  segmentation:
+    type: BINARY
+    mean_pool_join: true
+    remove_zeros: false
+    in_dim: 43
