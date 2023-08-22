@@ -32,8 +32,8 @@ splits="test valid train train_text"
 sph2wav=$KALDI_ROOT/tools/sph2pipe_v2.5/sph2pipe
 wav_dir=$tgt_dir/wav
 
-stage=5
-stop_stage=5
+stage=1
+stop_stage=6
 if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
   mkdir -p $tgt_dir $wav_dir
   find $timit_root/{TRAIN,TEST} -iname "*.WAV" > $tgt_dir/all_sph.flist
@@ -123,6 +123,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
   for s in $setups; do
     echo prepare timit stage 5 $s
     zsh scripts/prepare_audio.sh $tgt_dir/$s $tgt_dir/$s/feat $model 512 14 $orig_n_clus
+    zsh scripts/prepare_segmented_audio.sh $tgt_dir/$s $tgt_dir/$s/feat $model 512 14 $orig_n_clus
   done
 fi
 

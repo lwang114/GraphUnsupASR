@@ -55,6 +55,12 @@ class UnpairedAudioTextConfig(FairseqDataclass):
     text_data: str = field(
         default=MISSING, metadata={"help": "path to data directory containing text"}
     )
+    segment_data: Optional[str] = field(
+        default="", 
+        metadata={
+            "help": "path to data directory containing segmentation"
+        },
+    )
     max_length: Optional[int] = None
     labels: Optional[str] = field(
         default=None,
@@ -429,6 +435,7 @@ class UnpairedAudioText(FairseqTask):
 
     def load_dataset(self, split: str, task_cfg: FairseqDataclass = None, **kwargs):
         data_path = self.cfg.data
+        segment_path = self.cfg.segment_data
         task_cfg = task_cfg or self.cfg
 
         has_unpaired_text = os.path.exists(
@@ -444,6 +451,7 @@ class UnpairedAudioText(FairseqTask):
             label_dict=self.target_dictionary,
             shuffle=getattr(task_cfg, "shuffle", True),
             sort_by_length=task_cfg.sort_by_length,
+            segment_path=segment_path,
             # aux_target_postfix=task_cfg.aux_target_postfix,
         )
 

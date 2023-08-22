@@ -29,6 +29,7 @@ class ExtractedFeaturesDataset(FairseqDataset):
         shuffle=True,
         sort_by_length=True,
         aux_target_postfix=None,
+        segment_path=None,
     ):
         super().__init__()
 
@@ -51,6 +52,11 @@ class ExtractedFeaturesDataset(FairseqDataset):
 
         path = os.path.join(path, split)
         data_path = path
+        if segment_path:
+            segment_path = os.path.join(segment_path, split)
+        else:
+            segment_path = data_path
+
         self.data = np.load(data_path + ".npy", mmap_mode="r")
         self.clus_data = None
         if os.path.exists(data_path + "_clus.npy"):
@@ -77,8 +83,8 @@ class ExtractedFeaturesDataset(FairseqDataset):
                         self.labels.append(lbl)
                 offset += length
 
-        if os.path.exists(data_path + ".src"):
-            with open(data_path + ".src", "r") as src_f:
+        if os.path.exists(segment_path + ".src"):
+            with open(segment_path + ".src", "r") as src_f:
                 for idx, line in enumerate(src_f):
                     clusts = list(map(int, line.rstrip().split()))
                     clusts = torch.tensor(clusts)
