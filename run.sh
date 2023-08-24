@@ -148,12 +148,9 @@ fi
 
 echo stage 5, pre-quantized ASR-U alignment: second pass
 if [ $stage -ge 5 ] && [ $stop_stage -le 5 ]; then
-    n_clus=512
     ckpt_dir=$(pwd)/multirun/timit_iter2
 
-    #TASK_DATA=$tgt_dir/$s/feat
-    TASK_DATA=$tgt_dir/$s/feat/precompute_pca512_asru_seg_mean_onehot_clus$n_clus
- 
+    TASK_DATA=$tgt_dir/$s/feat 
     for x in valid train; do
         HYDRA_FULL_ERROR=1 python w2vu_generate.py --config-dir $(pwd)/config/generate --config-name viterbi \
             fairseq.common.user_dir=$(pwd)/wav2vecu_graph \
@@ -164,8 +161,14 @@ if [ $stage -ge 5 ] && [ $stop_stage -le 5 ]; then
     done
 fi
 
-echo stage 6, segmented ASR-U training
+echo stage 6, segmented ASR-U preprocessing
 if [ $stage -ge 6 ] && [ $stop_stage -le 6 ]; then
+    seg_dir=$tgt_dir/$s/phn_asru_seg_iter2
+    zsh scripts/prepare_segmented_audio.sh $TIMIT_DIR $tgt_dir $seg_dir
+fi
+
+echo stage 7, segmented ASR-U training
+if [ $stage -ge 7 ] && [ $stop_stage -le 7 ]; then
     echo $tgt_dir
     PREFIX=w2v_unsup_gan_xp
     n_clus=512
@@ -177,7 +180,6 @@ if [ $stage -ge 6 ] && [ $stop_stage -le 6 ]; then
 
     # Unpaired text input
     TEXT_DATA=$tgt_dir/$s/phones  # path to fairseq-preprocessed GAN data (phones dir)
-    SEGMENT_DATA=$tgt_dir/$s/phn_asru_seg_iter2
     KENLM_PATH=${tgt_dir}/$s/phones/train_text_phn.04.bin  # KenLM 4-gram phoneme language model (LM data = GAN data here)
 
     ckpt_dir=$(pwd)/multirun/timit_segmented 
@@ -186,7 +188,6 @@ if [ $stage -ge 6 ] && [ $stop_stage -le 6 ]; then
         --config-name $CONFIG_NAME \
         task.data=$TASK_DATA \
         task.text_data=$TEXT_DATA \
-        task.segment_data=$SEGMENT_DATA \
         task.kenlm_path=$KENLM_PATH \
         common.user_dir=$(pwd)/wav2vecu_graph \
         model.code_penalty=0.0 model.gradient_penalty=0.0 \
