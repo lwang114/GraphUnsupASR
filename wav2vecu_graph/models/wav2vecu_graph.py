@@ -905,7 +905,8 @@ class Wav2vecU_Graph(BaseFairseqModel):
         self.pca_A = self.pca_b = None
         d = cfg.input_dim
 
-        self.cfg.segmentation.type = SegmentationType.BINARY
+        if self.segment_weight > 0 or cfg.segmentation.type == SegmentationType.BINARY:
+            self.cfg.segmentation.type = SegmentationType.BINARY
         self.segmenter = SEGMENT_FACTORY[cfg.segmentation.type](cfg.segmentation)
         self.join_segmenter = JoinSegmenter(cfg.segmentation)
 

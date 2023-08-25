@@ -52,17 +52,16 @@ if [ ! -d ${tgt_dir} ]; then
     mkdir -p $tgt_dir
 fi
 
-stage=1
-stop_stage=100
+stage=5
+stop_stage=5
 echo stage 0, feature extraction
-if [ $stage -ge 0 ] && [ $stop_stage -le 0 ]; then
+if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
     orig_n_clus=128
     bash scripts/prepare_timit.sh $TIMIT_DIR $tgt_dir $W2V $orig_n_clus
 fi
 
 echo stage 1, pre-quantized ASR-U training: first pass
-if [ $stage -ge 1 ] && [ $stop_stage -le 1 ]; then
-    echo $tgt_dir
+if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
     PREFIX=w2v_unsup_gan_xp
     n_clus=128
     bsz=640
@@ -94,14 +93,14 @@ if [ $stage -ge 1 ] && [ $stop_stage -le 1 ]; then
 fi
 
 echo stage 2, pre-quantized ASR-U alignment: first pass
-if [ $stage -ge 2 ] && [ $stop_stage -le 2 ]; then
+if [ $stage -le 2 ] && [ $stop_stage -ge 2 ]; then
     n_clus=512
     ckpt_dir=$(pwd)/multirun/timit_iter1
 
     #TASK_DATA=$tgt_dir/$s/feat
     TASK_DATA=$tgt_dir/$s/feat/precompute_pca512_asru_seg_mean_onehot_clus$n_clus
  
-    for x in valid train; do
+    for x in test valid train; do
         HYDRA_FULL_ERROR=1 python w2vu_generate.py --config-dir $(pwd)/config/generate --config-name viterbi \
             fairseq.common.user_dir=$(pwd)/wav2vecu_graph \
             fairseq.task.data=$TASK_DATA \
@@ -112,8 +111,7 @@ if [ $stage -ge 2 ] && [ $stop_stage -le 2 ]; then
 fi
 
 echo stage 3, pre-quantized ASR-U training: second pass
-if [ $stage -ge 3 ] && [ $stop_stage -le 3 ]; then
-    echo $tgt_dir
+if [ $stage -le 3 ] && [ $stop_stage -ge 3 ]; then
     PREFIX=w2v_unsup_gan_xp
     n_clus=128
     bsz=640
@@ -131,7 +129,7 @@ if [ $stage -ge 3 ] && [ $stop_stage -le 3 ]; then
     KENLM_PATH=${tgt_dir}/$s/phones/train_text_phn.04.bin  # KenLM 4-gram phoneme language model (LM data = GAN data here)
 
     ckpt_dir=$(pwd)/multirun/timit_iter2
-    CUDA_VISIBLE_DEVICES=2 PYTHONPATH=$FAIRSEQ_ROOT PREFIX=$PREFIX fairseq-hydra-train \
+    CUDA_VISIBLE_DEVICES=3 PYTHONPATH=$FAIRSEQ_ROOT PREFIX=$PREFIX fairseq-hydra-train \
         -m --config-dir config/l1 \
         --config-name $CONFIG_NAME \
         task.data=$TASK_DATA \
@@ -146,29 +144,64 @@ if [ $stage -ge 3 ] && [ $stop_stage -le 3 ]; then
         hydra.sweep.dir=$ckpt_dir
 fi
 
-echo stage 5, pre-quantized ASR-U alignment: second pass
-if [ $stage -ge 5 ] && [ $stop_stage -le 5 ]; then
+echo stage 4, pre-quantized ASR-U alignment: second pass
+if [ $stage -le 4 ] && [ $stop_stage -ge 4 ]; then
     ckpt_dir=$(pwd)/multirun/timit_iter2
 
     TASK_DATA=$tgt_dir/$s/feat 
-    for x in valid train; do
+    for x in test valid train; do
         HYDRA_FULL_ERROR=1 python w2vu_generate.py --config-dir $(pwd)/config/generate --config-name viterbi \
             fairseq.common.user_dir=$(pwd)/wav2vecu_graph \
             fairseq.task.data=$TASK_DATA \
             fairseq.task.text_data=$tgt_dir/$s/phones \
             fairseq.common_eval.path=$ckpt_dir/0/checkpoint_best.pt \
-            fairseq.dataset.gen_subset=$x results_path=$tgt_dir/$s/phn_asru_seg_iter2
+            fairseq.dataset.gen_subset=$x results_path=$tgt_dir/$s/phn_asru_seg_iter2 \
+            margin=0.0
     done
 fi
 
+echo stage 5, pre-quantized ASR-U training: third pass
+if [ $stage -le 5 ] && [ $stop_stage -ge 5 ]; then
+    PREFIX=w2v_unsup_gan_xp
+    n_clus=128
+    bsz=640
+    skip_size=6
+    tri_size=2
+    kernel_size=4
+
+    CONFIG_NAME=l1_w2vu_onehot_clus${n_clus}_5gram_bsz${bsz}_kernel${kernel_size}_posweight1_1_softpool
+    # CONFIG_NAME=l1_w2vu_onehot_clus${n_clus}_skip${skip_size}_bsz${bsz}_kernel${kernel_size}_softpool
+    TASK_DATA=$tgt_dir/$s/feat
+
+    # Unpaired text input
+    TEXT_DATA=$tgt_dir/$s/phones  # path to fairseq-preprocessed GAN data (phones dir)
+    SEGMENT_DATA=$tgt_dir/$s/phn_asru_seg_iter2
+    KENLM_PATH=${tgt_dir}/$s/phones/train_text_phn.04.bin  # KenLM 4-gram phoneme language model (LM data = GAN data here)
+
+#    ckpt_dir=$(pwd)/multirun/timit_iter2
+    CUDA_VISIBLE_DEVICES=3 PYTHONPATH=$FAIRSEQ_ROOT PREFIX=$PREFIX fairseq-hydra-train \
+        -m --config-dir config/l1 \
+        --config-name $CONFIG_NAME \
+        task.data=$TASK_DATA \
+        task.segment_data=$SEGMENT_DATA \
+        task.text_data=$TEXT_DATA \
+        task.kenlm_path=$KENLM_PATH \
+        common.user_dir=$(pwd)/wav2vecu_graph \
+        model.code_penalty=0.0 model.gradient_penalty=0.0 \
+        model.smoothness_weight=16.0 'common.seed=range(0,1)' #\
+#        checkpoint.save_dir='./' \
+#        hydra.run.dir=$ckpt_dir \
+#        hydra.sweep.dir=$ckpt_dir
+fi
+
 echo stage 6, segmented ASR-U preprocessing
-if [ $stage -ge 6 ] && [ $stop_stage -le 6 ]; then
+if [ $stage -le 6 ] && [ $stop_stage -ge 6 ]; then
     seg_dir=$tgt_dir/$s/phn_asru_seg_iter2
     zsh scripts/prepare_segmented_audio.sh $TIMIT_DIR $tgt_dir $seg_dir
 fi
 
 echo stage 7, segmented ASR-U training
-if [ $stage -ge 7 ] && [ $stop_stage -le 7 ]; then
+if [ $stage -le 7 ] && [ $stop_stage -ge 7 ]; then
     echo $tgt_dir
     PREFIX=w2v_unsup_gan_xp
     n_clus=512
@@ -195,4 +228,19 @@ if [ $stage -ge 7 ] && [ $stop_stage -le 7 ]; then
         checkpoint.save_dir='./' \
         hydra.run.dir=$ckpt_dir \
         hydra.sweep.dir=$ckpt_dir
+fi
+
+echo stage 8, segmented ASR-U evaluation
+if [ $stage -le 8 ] && [ $stop_stage -ge 8 ]; then
+    ckpt_dir=$(pwd)/multirun/timit_segmented
+
+    TASK_DATA=$tgt_dir/$s/feat/precompute_pca512_asru_seg_mean_onehot_clus512
+    for x in test valid train; do
+        HYDRA_FULL_ERROR=1 python w2vu_segmented_generate.py --config-dir $(pwd)/config/generate --config-name viterbi_segmented \
+            fairseq.common.user_dir=$(pwd)/wav2vecu_graph \
+            fairseq.task.data=$TASK_DATA \
+            fairseq.task.text_data=$tgt_dir/$s/phones \
+            fairseq.common_eval.path=$ckpt_dir/0/checkpoint_best.pt \
+            fairseq.dataset.gen_subset=$x results_path=$ckpt_dir
+    done
 fi
