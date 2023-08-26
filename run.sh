@@ -16,11 +16,6 @@
 ##SBATCH --mail-type=ALL
 
 
-source /home/lwang114/anaconda3/etc/profile.d/conda.sh
-PYTHON_VIRTUAL_ENVIRONMENT=/home/lwang114/anaconda3/envs/fairseq
-conda activate ${PYTHON_VIRTUAL_ENVIRONMENT}
-. parse_options.sh || exit 1;
-
 function error
 {
     if [ -z "$1" ]
@@ -35,25 +30,52 @@ function error
     exit 1
 }
 
-export KALDI_ROOT=/ws/ifp-53_1/hasegawa/tools/kaldi 
-export FAIRSEQ_ROOT=/ws/ifp-53_2/hasegawa/lwang114/spring2022/fairseq
-export KENLM_ROOT=/ws/ifp-53_2/hasegawa/lwang114/spring2022/UnsupTTS/kenlm/build/bin
-export RVAD_ROOT=/ws/ifp-53_2/hasegawa/lwang114/spring2022/UnsupTTS/rVADfast
+server="hal"
+if [ $server = "ifp" ]; then
+    source /home/lwang114/anaconda3/etc/profile.d/conda.sh
+    PYTHON_VIRTUAL_ENVIRONMENT=/home/lwang114/anaconda3/envs/fairseq
+    conda activate ${PYTHON_VIRTUAL_ENVIRONMENT}
 
-TIMIT_DIR=/ws/ifp-53_2/hasegawa/lwang114/data/TIMIT
-W2V=/home/hertin/models/wav2vec_vox_new.pt
+    export KALDI_ROOT=/ws/ifp-53_1/hasegawa/tools/kaldi 
+    export FAIRSEQ_ROOT=/ws/ifp-53_2/hasegawa/lwang114/spring2022/fairseq
+    export KENLM_ROOT=/ws/ifp-53_2/hasegawa/lwang114/spring2022/UnsupTTS/kenlm/build/bin
+    export RVAD_ROOT=/ws/ifp-53_2/hasegawa/lwang114/spring2022/UnsupTTS/rVADfast
+
+    TIMIT_DIR=/ws/ifp-53_2/hasegawa/lwang114/data/TIMIT
+    W2V=/home/hertin/models/wav2vec_vox_new.pt
+elif [ $server = "hal" ]; then
+    source /opt/miniconda3/etc/profile.d/conda.sh
+    PYTHON_VIRTUAL_ENVIRONMENT=/home/hertin/.conda/envs/wav2vec
+    conda activate ${PYTHON_VIRTUAL_ENVIRONMENT}
+
+    export KALDI_ROOT=/home/hertin/softwares/kaldi
+    export FAIRSEQ_ROOT=/home/hertin/workplace/wav2vec/fairseq
+    export KENLM_ROOT=/home/hertin/softwares/kenlm/build/bin
+    export RVAD_ROOT=/home/hertin/workplace/wav2vec/fairseq/examples/wav2vec/unsupervised/rVADfast
+
+    TIMIT_DIR=/home/hertin/data/timit/TIMIT
+    W2V=/home/hertin/models/wav2vec_vox_new.pt
+elif [ $server = "satori" ]; then
+    source /nobackup/users/junruin2/anaconda3/etc/profile.d/conda.sh
+    conda activate /nobackup/users/junruin2/anaconda3/envs/exp_spring2022
+
+    export KALDI_ROOT=/nobackup/users/junruin2/pykaldi_expspring2022/tools/kaldi
+    export FAIRSEQ_ROOT=/nobackup/users/junruin2/fairseq_expspring2022
+    export VAD_ROOT=/nobackup/users/junruin2/rVAD/rVADfast_py_2.0
+    export ENLM_ROOT=/nobackup/users/junruin2/kenlm/build/bin    
+fi
 
 set -eu
 set -o pipefail
 
-tgt_dir=$(pwd)/manifest/timit_norep  #unsup_seg
+tgt_dir=$(pwd)/manifest/timit_norep
 s=matched
 if [ ! -d ${tgt_dir} ]; then
     mkdir -p $tgt_dir
 fi
 
-stage=5
-stop_stage=5
+stage=0
+stop_stage=100
 echo stage 0, feature extraction
 if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
     orig_n_clus=128

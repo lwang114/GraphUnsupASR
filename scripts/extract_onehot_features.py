@@ -22,7 +22,7 @@ def main():
 
     vocab = []
     sents = {}
-    for x in ["train", "valid"]:  #"test"]:
+    for x in ["train", "valid", "test"]:
         if args.fmt == "faiss":
             with open(in_dir / f"{x}.{args.suffix}", "r") as f_in,\
                 open(out_dir / f"{x}.lengths", "w") as f_out:
@@ -56,7 +56,7 @@ def main():
     
     n = len(vocab)
     print(f"Vocab size: {n}")
-    for x in ["train", "valid"]:  #"test", 
+    for x in ["train", "valid", "test"]: 
         feats = []
         if args.save_int:
             feats = np.asarray(

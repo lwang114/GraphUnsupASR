@@ -7,7 +7,7 @@ set -e
 source_dir=$1
 tgt_dir=$2
 model=$3
-stage=8
+stage=1
 stop_stage=9
 
 echo satge 1
@@ -83,8 +83,8 @@ fi
 echo stage 5
 if [ $stage -le 5 ] && [ $stop_stage -ge 5 ]; then
     for split in $all_splits; do
-      python $FAIRSEQ_ROOT/examples/wav2vec/unsupervised/scripts/wav2vec_apply_cluster_faiss.py $tgt_dir \
-      --checkpoint $model --path $tgt_dir/CLUS$orig_n_clus --split $split
+      #python $FAIRSEQ_ROOT/examples/wav2vec/unsupervised/scripts/wav2vec_apply_cluster_faiss.py $tgt_dir \
+      #--checkpoint $model --path $tgt_dir/CLUS$orig_n_clus --split $split
       python scripts/image_apply_cluster_faiss.py $tgt_dir --split $split --path $tgt_dir/CLUS$orig_n_clus
     done
 fi
