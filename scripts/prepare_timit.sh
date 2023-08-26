@@ -123,7 +123,6 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
   for s in $setups; do
     echo prepare timit stage 5 $s
     zsh scripts/prepare_audio.sh $tgt_dir/$s $tgt_dir/$s/feat $model 512 14 $orig_n_clus
-    zsh scripts/prepare_segmented_audio.sh $tgt_dir/$s $tgt_dir/$s/feat $model 512 14 $orig_n_clus
   done
 fi
 
