@@ -266,3 +266,38 @@ if [ $stage -le 8 ] && [ $stop_stage -ge 8 ]; then
             fairseq.dataset.gen_subset=$x results_path=$ckpt_dir
     done
 fi
+
+echo stage 9, Kaldi self-training
+if [ $stage -le 9 ] && [ $stop_stage -ge 9 ]; then
+    checkpoint_root=$(pwd)/multirun/timit_segmented
+    
+    LM_PATH=$tgt_dir/$s/phones/train_text_phn.04.arpa
+    KENLM_PATH=$tgt_dir/$s/phones/train_text_phn.04.bin  # KenLM 4-gram phoneme language model (LM data = GAN data here)
+    
+    cwd=$(pwd)
+    cd kaldi_self_train/st
+    # if [ -L utils ]; then
+    #     rm utils
+    # fi
+    # if [ -L steps ]; then
+    #     rm steps
+    # fi 
+    # ln -s $KALDI_ROOT/egs/wsj/s5/utils utils
+    # ln -s $KALDI_ROOT/egs/wsj/s5/steps steps
+    cp $tgt_dir/$s/phones/dict.phn.txt $tgt_dir/$s/feat/precompute_pca512
+
+    if [ ! -d ${checkpoint_root}/st ]; then
+        mkdir -p ${checkpoint_root}/st
+        mv ${checkpoint_root}/*.* ${checkpoint_root}/st
+    fi
+    bash train.sh $tgt_dir/$s/feat/precompute_pca512 \
+        ${checkpoint_root}/st \
+        ${checkpoint_root}/st \
+        ${LM_PATH} \
+        ${KENLM_PATH}
+
+    bash decode_phone.sh ${checkpoint_root}/st \
+        7.0.0 tri2b \
+        steps/decode.sh
+    cd ${cwd}
+fi
