@@ -23,6 +23,7 @@ task:
   _name: unpaired_audio_text
   data: ???
   text_data: ???
+  segment_data: ""
   shuffle: False
   labels: phn
   sort_by_length: false

@@ -32,7 +32,7 @@ splits="test valid train train_text"
 sph2wav=$KALDI_ROOT/tools/sph2pipe_v2.5/sph2pipe
 wav_dir=$tgt_dir/wav
 
-stage=1
+stage=6
 stop_stage=6
 if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
   mkdir -p $tgt_dir $wav_dir

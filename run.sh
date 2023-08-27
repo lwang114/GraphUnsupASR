@@ -1,17 +1,31 @@
 #!/bin/bash
-#SBATCH --job-name="logs/timit_asru_graph"
-#SBATCH --output="logs/%j.%N_timit_asru_graph.out"
-#SBATCH --error="logs/%j.%N_timit_asru_graph.err"
-#SBATCH --partition=gpu
-#SBATCH --mem-per-cpu=2400
-#SBATCH --time=24:00:00
+#SBATCH -J wav2vecu_graph
+#SBATCH -o logs/%j_wav2vecu_graph.out
+#SBATCH -e logs/%j_wav2vecu_graph.err
+#SBATCH --mail-user=limingw@mit.edu
+#SBATCH --qos=sched_level_2
+#SBATCH --mail-type=ALL
+#SBATCH --gres=gpu:1
+#SBATCH --gpus-per-node=1
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=32
-#SBATCH --sockets-per-node=1
-#SBATCH --cores-per-socket=4
-#SBATCH --threads-per-core=4
-#SBATCH --export=ALL
-#SBATCH --gres=gpu:v100:2
+#SBATCH --ntasks-per-node=4
+#SBATCH --mem=0
+#SBATCH --time=24:00:00
+#SBATCH --exclusive
+
+##SBATCH --job-name="logs/timit_asru_graph"
+##SBATCH --output="logs/%j.%N_timit_asru_graph.out"
+##SBATCH --error="logs/%j.%N_timit_asru_graph.err"
+##SBATCH --partition=gpu
+##SBATCH --mem-per-cpu=2400
+##SBATCH --time=24:00:00
+##SBATCH --nodes=1
+##SBATCH --ntasks-per-node=32
+##SBATCH --sockets-per-node=1
+##SBATCH --cores-per-socket=4
+##SBATCH --threads-per-core=4
+##SBATCH --export=ALL
+##SBATCH --gres=gpu:v100:2
 ##SBATCH --mail-uer=lwang114@illinois.edu
 ##SBATCH --mail-type=ALL
 
@@ -30,7 +44,7 @@ function error
     exit 1
 }
 
-server="hal"
+server="satori"
 if [ $server = "ifp" ]; then
     source /home/lwang114/anaconda3/etc/profile.d/conda.sh
     PYTHON_VIRTUAL_ENVIRONMENT=/home/lwang114/anaconda3/envs/fairseq
@@ -72,7 +86,7 @@ set -eu
 set -o pipefail
 
 tgt_dir=$(pwd)/manifest/timit_norep
-s=matched
+s=unmatched
 if [ ! -d ${tgt_dir} ]; then
     mkdir -p $tgt_dir
 fi
@@ -95,19 +109,21 @@ if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
     kernel_size=4
 
     # For wav2vec-U, audio features are pre-segmented
-    CONFIG_NAME=l1_w2vu_onehot_clus${n_clus}_skip${skip_size}_tri${tri_size}_bsz${bsz}_kernel${kernel_size}_softpool
+    CONFIG_NAME=l1_w2vu_onehot_clus${n_clus}_skip${skip_size}_tri${tri_size}_bsz${bsz}_kernel${kernel_size}_posweight1_1_softpool
     TASK_DATA=$tgt_dir/$s/feat
+    SEGMENT_DATA=$tgt_dir/$s/phn_unsup_seg_readout
 
     # Unpaired text input
     TEXT_DATA=$tgt_dir/$s/phones  # path to fairseq-preprocessed GAN data (phones dir)
-    KENLM_PATH=${tgt_dir}/$s/phones/train_text_phn.04.bin  # KenLM 4-gram phoneme language model (LM data = GAN data here)
+    KENLM_PATH=$tgt_dir/$s/phones/train_text_phn.04.bin  # KenLM 4-gram phoneme language model (LM data = GAN data here)
 
     ckpt_dir=$(pwd)/multirun/timit_iter1
-    CUDA_VISIBLE_DEVICES=2 PYTHONPATH=$FAIRSEQ_ROOT PREFIX=$PREFIX fairseq-hydra-train \
+    CUDA_VISIBLE_DEVICES=0 PYTHONPATH=$FAIRSEQ_ROOT PREFIX=$PREFIX fairseq-hydra-train \
         -m --config-dir config/l1 \
         --config-name $CONFIG_NAME \
         task.data=$TASK_DATA \
         task.text_data=$TEXT_DATA \
+        task.segment_data=$SEGMENT_DATA \
         task.kenlm_path=$KENLM_PATH \
         common.user_dir=$(pwd)/wav2vecu_graph \
         model.code_penalty=0.0 model.gradient_penalty=0.0 \
@@ -122,9 +138,7 @@ if [ $stage -le 2 ] && [ $stop_stage -ge 2 ]; then
     n_clus=512
     ckpt_dir=$(pwd)/multirun/timit_iter1
 
-    #TASK_DATA=$tgt_dir/$s/feat
-    TASK_DATA=$tgt_dir/$s/feat/precompute_pca512_asru_seg_mean_onehot_clus$n_clus
- 
+    TASK_DATA=$tgt_dir/$s/feat
     for x in test valid train; do
         HYDRA_FULL_ERROR=1 python w2vu_generate.py --config-dir $(pwd)/config/generate --config-name viterbi \
             fairseq.common.user_dir=$(pwd)/wav2vecu_graph \
@@ -144,8 +158,9 @@ if [ $stage -le 3 ] && [ $stop_stage -ge 3 ]; then
     tri_size=2
     kernel_size=4
 
-    # For wav2vec-U, audio features are pre-segmented
-    CONFIG_NAME=l1_w2vu_onehot_clus${n_clus}_skip${skip_size}_tri${tri_size}_bsz${bsz}_kernel${kernel_size}_softpool
+    # For wav2vec-U, audio features are pre-segmented 
+    CONFIG_NAME=l1_w2vu_onehot_clus${n_clus}_skip${skip_size}_tri${tri_size}_bsz${bsz}_kernel${kernel_size}_posweight1_1_softpool
+
     TASK_DATA=$tgt_dir/$s/feat
 
     # Unpaired text input
@@ -194,8 +209,7 @@ if [ $stage -le 5 ] && [ $stop_stage -ge 5 ]; then
     tri_size=2
     kernel_size=4
 
-    CONFIG_NAME=l1_w2vu_onehot_clus${n_clus}_5gram_bsz${bsz}_kernel${kernel_size}_posweight1_1_softpool
-    # CONFIG_NAME=l1_w2vu_onehot_clus${n_clus}_skip${skip_size}_bsz${bsz}_kernel${kernel_size}_softpool
+    CONFIG_NAME=l1_w2vu_onehot_clus${n_clus}_skip${skip_size}_tri${tri_size}_bsz${bsz}_kernel${kernel_size}_posweight1_1_softpool
     TASK_DATA=$tgt_dir/$s/feat
 
     # Unpaired text input
@@ -203,7 +217,7 @@ if [ $stage -le 5 ] && [ $stop_stage -ge 5 ]; then
     SEGMENT_DATA=$tgt_dir/$s/phn_asru_seg_iter2
     KENLM_PATH=${tgt_dir}/$s/phones/train_text_phn.04.bin  # KenLM 4-gram phoneme language model (LM data = GAN data here)
 
-#    ckpt_dir=$(pwd)/multirun/timit_iter2
+    ckpt_dir=$(pwd)/multirun/timit_iter3
     CUDA_VISIBLE_DEVICES=3 PYTHONPATH=$FAIRSEQ_ROOT PREFIX=$PREFIX fairseq-hydra-train \
         -m --config-dir config/l1 \
         --config-name $CONFIG_NAME \
@@ -213,10 +227,10 @@ if [ $stage -le 5 ] && [ $stop_stage -ge 5 ]; then
         task.kenlm_path=$KENLM_PATH \
         common.user_dir=$(pwd)/wav2vecu_graph \
         model.code_penalty=0.0 model.gradient_penalty=0.0 \
-        model.smoothness_weight=16.0 'common.seed=range(0,1)' #\
-#        checkpoint.save_dir='./' \
-#        hydra.run.dir=$ckpt_dir \
-#        hydra.sweep.dir=$ckpt_dir
+        model.smoothness_weight=16.0 'common.seed=range(0,1)' \
+        checkpoint.save_dir='./' \
+        hydra.run.dir=$ckpt_dir \
+        hydra.sweep.dir=$ckpt_dir
 fi
 
 echo stage 6, segmented ASR-U preprocessing
