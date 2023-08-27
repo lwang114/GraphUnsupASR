@@ -62,7 +62,10 @@ elif [ $server = "satori" ]; then
     export KALDI_ROOT=/nobackup/users/junruin2/pykaldi_expspring2022/tools/kaldi
     export FAIRSEQ_ROOT=/nobackup/users/junruin2/fairseq_expspring2022
     export VAD_ROOT=/nobackup/users/junruin2/rVAD/rVADfast_py_2.0
-    export ENLM_ROOT=/nobackup/users/junruin2/kenlm/build/bin    
+    export KENLM_ROOT=/nobackup/users/junruin2/kenlm/build/bin    
+
+    TIMIT_DIR=/home/hertin/data/timit/TIMIT
+    W2V=/home/hertin/models/wav2vec_vox_new.pt
 fi
 
 set -eu
@@ -75,7 +78,7 @@ if [ ! -d ${tgt_dir} ]; then
 fi
 
 stage=0
-stop_stage=100
+stop_stage=0
 echo stage 0, feature extraction
 if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
     orig_n_clus=128
