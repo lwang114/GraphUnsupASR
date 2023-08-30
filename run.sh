@@ -91,8 +91,8 @@ if [ ! -d ${tgt_dir} ]; then
     mkdir -p $tgt_dir
 fi
 
-stage=0
-stop_stage=0
+stage=3
+stop_stage=3
 echo stage 0, feature extraction
 if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
     orig_n_clus=128
@@ -117,7 +117,7 @@ if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
     TEXT_DATA=$tgt_dir/$s/phones  # path to fairseq-preprocessed GAN data (phones dir)
     KENLM_PATH=$tgt_dir/$s/phones/train_text_phn.04.bin  # KenLM 4-gram phoneme language model (LM data = GAN data here)
 
-    ckpt_dir=$(pwd)/multirun/timit_iter1
+    ckpt_dir=$(pwd)/multirun/timit_${s}_iter1
     CUDA_VISIBLE_DEVICES=0 PYTHONPATH=$FAIRSEQ_ROOT PREFIX=$PREFIX fairseq-hydra-train \
         -m --config-dir config/l1 \
         --config-name $CONFIG_NAME \
@@ -136,7 +136,7 @@ fi
 echo stage 2, pre-quantized ASR-U alignment: first pass
 if [ $stage -le 2 ] && [ $stop_stage -ge 2 ]; then
     n_clus=512
-    ckpt_dir=$(pwd)/multirun/timit_iter1
+    ckpt_dir=$(pwd)/multirun/timit_${s}_iter1
 
     TASK_DATA=$tgt_dir/$s/feat
     for x in test valid train; do
@@ -168,7 +168,7 @@ if [ $stage -le 3 ] && [ $stop_stage -ge 3 ]; then
     SEGMENT_DATA=$tgt_dir/$s/phn_asru_seg_iter1
     KENLM_PATH=${tgt_dir}/$s/phones/train_text_phn.04.bin  # KenLM 4-gram phoneme language model (LM data = GAN data here)
 
-    ckpt_dir=$(pwd)/multirun/timit_iter2
+    ckpt_dir=$(pwd)/multirun/timit_${s}_iter2
     CUDA_VISIBLE_DEVICES=3 PYTHONPATH=$FAIRSEQ_ROOT PREFIX=$PREFIX fairseq-hydra-train \
         -m --config-dir config/l1 \
         --config-name $CONFIG_NAME \
@@ -186,7 +186,7 @@ fi
 
 echo stage 4, pre-quantized ASR-U alignment: second pass
 if [ $stage -le 4 ] && [ $stop_stage -ge 4 ]; then
-    ckpt_dir=$(pwd)/multirun/timit_iter2
+    ckpt_dir=$(pwd)/multirun/timit_${s}_iter2
 
     TASK_DATA=$tgt_dir/$s/feat 
     for x in test valid train; do
@@ -217,7 +217,7 @@ if [ $stage -le 5 ] && [ $stop_stage -ge 5 ]; then
     SEGMENT_DATA=$tgt_dir/$s/phn_asru_seg_iter2
     KENLM_PATH=${tgt_dir}/$s/phones/train_text_phn.04.bin  # KenLM 4-gram phoneme language model (LM data = GAN data here)
 
-    ckpt_dir=$(pwd)/multirun/timit_iter3
+    ckpt_dir=$(pwd)/multirun/timit_${s}_iter3
     CUDA_VISIBLE_DEVICES=3 PYTHONPATH=$FAIRSEQ_ROOT PREFIX=$PREFIX fairseq-hydra-train \
         -m --config-dir config/l1 \
         --config-name $CONFIG_NAME \
@@ -254,7 +254,7 @@ if [ $stage -le 7 ] && [ $stop_stage -ge 7 ]; then
     TEXT_DATA=$tgt_dir/$s/phones  # path to fairseq-preprocessed GAN data (phones dir)
     KENLM_PATH=${tgt_dir}/$s/phones/train_text_phn.04.bin  # KenLM 4-gram phoneme language model (LM data = GAN data here)
 
-    ckpt_dir=$(pwd)/multirun/timit_segmented 
+    ckpt_dir=$(pwd)/multirun/timit_${s}_segmented 
     CUDA_VISIBLE_DEVICES=3 PYTHONPATH=$FAIRSEQ_ROOT PREFIX=$PREFIX fairseq-hydra-train \
         -m --config-dir config/l1 \
         --config-name $CONFIG_NAME \
@@ -271,7 +271,7 @@ fi
 
 echo stage 8, segmented ASR-U evaluation
 if [ $stage -le 8 ] && [ $stop_stage -ge 8 ]; then
-    ckpt_dir=$(pwd)/multirun/timit_segmented
+    ckpt_dir=$(pwd)/multirun/timit_${s}_segmented
 
     TASK_DATA=$tgt_dir/$s/feat/precompute_pca512_asru_seg_mean_onehot_clus512
     for x in test valid train; do
@@ -286,7 +286,7 @@ fi
 
 echo stage 9, Kaldi self-training
 if [ $stage -le 9 ] && [ $stop_stage -ge 9 ]; then
-    checkpoint_root=$(pwd)/multirun/timit_segmented
+    checkpoint_root=$(pwd)/multirun/timit_${s}_segmented
     
     LM_PATH=$tgt_dir/$s/phones/train_text_phn.04.arpa
     KENLM_PATH=$tgt_dir/$s/phones/train_text_phn.04.bin  # KenLM 4-gram phoneme language model (LM data = GAN data here)
