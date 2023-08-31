@@ -7,7 +7,7 @@ set -e
 source_dir=$1
 tgt_dir=$2
 seg_dir=$3
-stage=7
+stage=11
 stop_stage=12
 
 FAIRSEQ_ROOT=/home/hertin/workplace/wav2vec/fairseq
@@ -67,7 +67,7 @@ fi
 
 echo stage 11
 if [ $stage -le 11 ] && [ $stop_stage -ge 11 ]; then
-    for split in ${all_splits}; do
+    for split in $all_splits; do
         python scripts/image_apply_cluster_faiss.py \
             $tgt_dir/precompute_pca512_asru_seg_mean \
             --path $tgt_dir/precompute_pca512_asru_seg_mean/CLUS$n_clus \
