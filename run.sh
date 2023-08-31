@@ -1,35 +1,34 @@
 #!/bin/bash
-#SBATCH -J wav2vecu_graph
-#SBATCH -o logs/%j_wav2vecu_graph.out
-#SBATCH -e logs/%j_wav2vecu_graph.err
-#SBATCH --mail-user=limingw@mit.edu
-#SBATCH --qos=sched_level_2
-#SBATCH --mail-type=ALL
-#SBATCH --gres=gpu:1
-#SBATCH --gpus-per-node=1
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=4
-#SBATCH --mem=0
+#SBATCH --job-name="logs/timit_asru_graph"
+#SBATCH --output="logs/%j.%N_timit_asru_graph.out"
+#SBATCH --error="logs/%j.%N_timit_asru_graph.err"
+#SBATCH --partition=gpu
+#SBATCH --mem-per-cpu=2400
 #SBATCH --time=24:00:00
-#SBATCH --exclusive
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=32
+#SBATCH --sockets-per-node=1
+#SBATCH --cores-per-socket=4
+#SBATCH --threads-per-core=4
+#SBATCH --export=ALL
+#SBATCH --gres=gpu:v100:2
+#SBATCH --mail-uer=lwang114@illinois.edu
+#SBATCH --mail-type=ALL
 
-##SBATCH --job-name="logs/timit_asru_graph"
-##SBATCH --output="logs/%j.%N_timit_asru_graph.out"
-##SBATCH --error="logs/%j.%N_timit_asru_graph.err"
-##SBATCH --partition=gpu
-##SBATCH --mem-per-cpu=2400
-##SBATCH --time=24:00:00
-##SBATCH --nodes=1
-##SBATCH --ntasks-per-node=32
-##SBATCH --sockets-per-node=1
-##SBATCH --cores-per-socket=4
-##SBATCH --threads-per-core=4
-##SBATCH --export=ALL
-##SBATCH --gres=gpu:v100:2
-##SBATCH --mail-uer=lwang114@illinois.edu
+##SBATCH -J wav2vecu_graph
+##SBATCH -o logs/%j_wav2vecu_graph.out
+##SBATCH -e logs/%j_wav2vecu_graph.err
+##SBATCH --mail-user=limingw@mit.edu
+##SBATCH --qos=sched_level_2
 ##SBATCH --mail-type=ALL
-
-
+##SBATCH --gres=gpu:1
+##SBATCH --gpus-per-node=1
+##SBATCH --nodes=1
+##SBATCH --ntasks-per-node=4
+##SBATCH --mem=0
+##SBATCH --time=24:00:00
+##SBATCH --exclusive
+ #
 function error
 {
     if [ -z "$1" ]
@@ -44,7 +43,7 @@ function error
     exit 1
 }
 
-server="satori"
+server="hal"
 if [ $server = "ifp" ]; then
     source /home/lwang114/anaconda3/etc/profile.d/conda.sh
     PYTHON_VIRTUAL_ENVIRONMENT=/home/lwang114/anaconda3/envs/fairseq
@@ -91,8 +90,8 @@ if [ ! -d ${tgt_dir} ]; then
     mkdir -p $tgt_dir
 fi
 
-stage=6
-stop_stage=6
+stage=7
+stop_stage=7
 echo stage 0, feature extraction
 if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
     orig_n_clus=128
@@ -236,7 +235,7 @@ fi
 echo stage 6, segmented ASR-U preprocessing
 if [ $stage -le 6 ] && [ $stop_stage -ge 6 ]; then
     seg_dir=$tgt_dir/$s/phn_asru_seg_iter2
-    zsh scripts/prepare_segmented_audio.sh $TIMIT_DIR $tgt_dir/$s/feat $seg_dir
+    zsh scripts/prepare_segmented_audio.sh $tgt_dir/$s $tgt_dir/$s/feat $seg_dir
 fi
 
 echo stage 7, segmented ASR-U training
