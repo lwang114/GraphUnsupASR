@@ -91,8 +91,8 @@ if [ ! -d ${tgt_dir} ]; then
     mkdir -p $tgt_dir
 fi
 
-stage=3
-stop_stage=3
+stage=6
+stop_stage=6
 echo stage 0, feature extraction
 if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
     orig_n_clus=128
@@ -236,7 +236,7 @@ fi
 echo stage 6, segmented ASR-U preprocessing
 if [ $stage -le 6 ] && [ $stop_stage -ge 6 ]; then
     seg_dir=$tgt_dir/$s/phn_asru_seg_iter2
-    zsh scripts/prepare_segmented_audio.sh $TIMIT_DIR $tgt_dir $seg_dir
+    zsh scripts/prepare_segmented_audio.sh $TIMIT_DIR $tgt_dir/$s/feat $seg_dir
 fi
 
 echo stage 7, segmented ASR-U training
