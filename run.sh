@@ -1,34 +1,35 @@
 #!/bin/bash
-#SBATCH --job-name="logs/timit_asru_graph"
-#SBATCH --output="logs/%j.%N_timit_asru_graph.out"
-#SBATCH --error="logs/%j.%N_timit_asru_graph.err"
-#SBATCH --partition=gpu
-#SBATCH --mem-per-cpu=2400
-#SBATCH --time=24:00:00
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=32
-#SBATCH --sockets-per-node=1
-#SBATCH --cores-per-socket=4
-#SBATCH --threads-per-core=4
-#SBATCH --export=ALL
-#SBATCH --gres=gpu:v100:2
-#SBATCH --mail-uer=lwang114@illinois.edu
+#SBATCH -J wav2vecu_graph
+#SBATCH -o logs/%j_wav2vecu_graph.out
+#SBATCH -e logs/%j_wav2vecu_graph.err
+#SBATCH --mail-user=limingw@mit.edu
+#SBATCH --qos=sched_level_2
 #SBATCH --mail-type=ALL
+#SBATCH --gres=gpu:1
+#SBATCH --gpus-per-node=1
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=4
+#SBATCH --mem=0
+#SBATCH --time=24:00:00
+#SBATCH --exclusive
 
-##SBATCH -J wav2vecu_graph
-##SBATCH -o logs/%j_wav2vecu_graph.out
-##SBATCH -e logs/%j_wav2vecu_graph.err
-##SBATCH --mail-user=limingw@mit.edu
-##SBATCH --qos=sched_level_2
-##SBATCH --mail-type=ALL
-##SBATCH --gres=gpu:1
-##SBATCH --gpus-per-node=1
-##SBATCH --nodes=1
-##SBATCH --ntasks-per-node=4
-##SBATCH --mem=0
+##SBATCH --job-name="logs/timit_asru_graph"
+##SBATCH --output="logs/%j.%N_timit_asru_graph.out"
+##SBATCH --error="logs/%j.%N_timit_asru_graph.err"
+##SBATCH --partition=gpu
+##SBATCH --mem-per-cpu=2400
 ##SBATCH --time=24:00:00
-##SBATCH --exclusive
- #
+##SBATCH --nodes=1
+##SBATCH --ntasks-per-node=32
+##SBATCH --sockets-per-node=1
+##SBATCH --cores-per-socket=4
+##SBATCH --threads-per-core=4
+##SBATCH --export=ALL
+##SBATCH --gres=gpu:v100:2
+##SBATCH --mail-uer=lwang114@illinois.edu
+##SBATCH --mail-type=ALL
+
+
 function error
 {
     if [ -z "$1" ]
@@ -43,7 +44,7 @@ function error
     exit 1
 }
 
-server="hal"
+server="satori"
 if [ $server = "ifp" ]; then
     source /home/lwang114/anaconda3/etc/profile.d/conda.sh
     PYTHON_VIRTUAL_ENVIRONMENT=/home/lwang114/anaconda3/envs/fairseq
@@ -77,21 +78,21 @@ elif [ $server = "satori" ]; then
     export VAD_ROOT=/nobackup/users/junruin2/rVAD/rVADfast_py_2.0
     export KENLM_ROOT=/nobackup/users/junruin2/kenlm/build/bin    
 
-    TIMIT_DIR=/home/hertin/data/timit/TIMIT
-    W2V=/home/hertin/models/wav2vec_vox_new.pt
+    TIMIT_DIR=/nobackup/users/limingw/data/TIMIT
+    W2V=/nobackup/users/limingw/models/wav2vec_vox_new.pt
 fi
 
 set -eu
 set -o pipefail
 
 tgt_dir=$(pwd)/manifest/timit_norep
-s=unmatched
+s=matched
 if [ ! -d ${tgt_dir} ]; then
     mkdir -p $tgt_dir
 fi
 
-stage=7
-stop_stage=7
+stage=11
+stop_stage=11
 echo stage 0, feature extraction
 if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
     orig_n_clus=128
@@ -254,7 +255,7 @@ if [ $stage -le 7 ] && [ $stop_stage -ge 7 ]; then
     KENLM_PATH=${tgt_dir}/$s/phones/train_text_phn.04.bin  # KenLM 4-gram phoneme language model (LM data = GAN data here)
 
     ckpt_dir=$(pwd)/multirun/timit_${s}_segmented 
-    CUDA_VISIBLE_DEVICES=3 PYTHONPATH=$FAIRSEQ_ROOT PREFIX=$PREFIX fairseq-hydra-train \
+    CUDA_VISIBLE_DEVICES=0 PYTHONPATH=$FAIRSEQ_ROOT PREFIX=$PREFIX fairseq-hydra-train \
         -m --config-dir config/l1 \
         --config-name $CONFIG_NAME \
         task.data=$TASK_DATA \
@@ -316,4 +317,69 @@ if [ $stage -le 9 ] && [ $stop_stage -ge 9 ]; then
         7.0.0 tri2b \
         steps/decode.sh
     cd ${cwd}
+fi
+
+echo stage 10, extract Kaldi force alignment
+if [ $stage -le 10 ] && [ $stop_stage -ge 10 ]; then
+    s=matched
+    model_name=mono
+    # checkpoint_root=$(pwd)/multirun/timit_${s}_segmented/st
+    checkpoint_root=$(pwd)/multirun/timit_segmented/st
+    cwd=$(pwd)
+    cd kaldi_self_train/st
+    . ./cmd.sh
+    . ./path.sh
+
+    for x in test; do
+        if [ ! -d $checkpoint_root/exp/${model_name}_ali_$x ]; then
+            steps/align_si.sh \
+                --cmd "$train_cmd" \
+                $checkpoint_root/data/$x \
+                $checkpoint_root/data/lang \
+                $checkpoint_root/exp/${model_name} \
+                $checkpoint_root/exp/${model_name}_ali_$x
+        fi
+    done
+
+    for x in test; do
+        for i in $checkpoint_root/exp/${model_name}_ali_$x/ali.*.gz;
+            do $KALDI_ROOT/src/bin/ali-to-phones --ctm-output $checkpoint_root/exp/${model_name}_ali_$x/final.mdl \
+            ark:"gunzip -c $i|" -> ${i%.gz}.ctm;
+        done;
+        cd $checkpoint_root/exp/${model_name}_ali_$x
+        cat *.ctm > merged_alignment.txt
+    done
+
+    $KALDI_ROOT/src/bin/show-alignments \
+        $checkpoint_root/data/lang/phones.txt \
+        $checkpoint_root/exp/$model_name/final.mdl \
+        ark:"gunzip -c $checkpoint_root/exp/${model_name}_ali_test/ali.1.gz|" > $checkpoint_root/exp/${model_name}_ali_test/alignments.readable
+
+    cd ${cwd}
+fi
+
+echo stage 11, pre-quantized ASR-U alignment: on the full TIMIT test set
+if [ $stage -le 11 ] && [ $stop_stage -ge 11 ]; then
+    python scripts/extract_timit_uid.py \
+        --timit_path $TIMIT_DIR/TEST \
+        --out_path $(pwd)/config/timit/test.uid 
+
+    python scripts/check_overlap.py $(pwd)/config/timit_unmatched/test.uid $(pwd)/config/timit/test.uid
+
+    if [ ! -d $tgt_dir/feat ]; then
+        mkdir -p $tgt_dir/feat
+        cp $tgt_dir/unmatched/feat/test* $tgt_dir/feat
+    fi
+    
+    ckpt_dir=$(pwd)/multirun/timit_${s}_iter3
+    TASK_DATA=$tgt_dir/feat
+    for x in test; do
+        HYDRA_FULL_ERROR=1 python w2vu_generate.py --config-dir $(pwd)/config/generate --config-name viterbi \
+            fairseq.common.user_dir=$(pwd)/wav2vecu_graph \
+            fairseq.task.data=$TASK_DATA \
+            fairseq.task.text_data=$tgt_dir/$s/phones \
+            fairseq.common_eval.path=$ckpt_dir/0/checkpoint_best.pt \
+            fairseq.dataset.gen_subset=$x results_path=$ckpt_dir/timit_test \
+            margin=0.0
+    done
 fi

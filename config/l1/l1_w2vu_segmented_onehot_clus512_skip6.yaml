@@ -69,7 +69,7 @@ model:
   _name: wav2vecu_graph
 
   skipgram_size: 6
-  trigram_size: 3
+  trigram_size: 2
 
   discriminator_dim: 43
   discriminator_depth: 0

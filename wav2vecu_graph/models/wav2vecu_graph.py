@@ -1089,11 +1089,12 @@ class Wav2vecU_Graph(BaseFairseqModel):
                 bin_scores = self.segmenter(
                     (orig_dense_x, features), orig_dense_padding_mask
                 )
-            return {
-                "logits": dense_x,
-                "padding_mask": dense_padding_mask,
-                "bin_scores": bin_scores,
-            }
+                return {
+                    "logits": dense_x,
+                    "padding_mask": dense_padding_mask,
+                    "bin_scores": bin_scores,
+                }
+            return {"logits": dense_x, "padding_mask": dense_padding_mask}
              
         token_padding_mask = random_label == self.pad
 
