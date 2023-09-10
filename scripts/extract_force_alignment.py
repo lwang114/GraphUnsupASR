@@ -19,9 +19,11 @@ def main():
     manifest_path = Path(args.manifest_path)                                       
     align_path = Path(args.align_path)                                             
     out_path = Path(args.out_path)
+    out_path.mkdir(parents=True, exist_ok=True)
 
     with open(manifest_path / f"{args.split}.lengths", "r") as f_len:
         sizes = f_len.read().strip().split("\n")
+        sizes = list(map(int, sizes))
 
     frames = []
     prev_sent_id = None
@@ -40,10 +42,8 @@ def main():
                 frames = []
                 prev_sent_id = sent_id
                 idx += 1
-            
-            start = int(float(start) * 50)
-            end = int(float(end) * 50)
-            frames.extend([lbl]*(end-start))
+            dur = int(float(dur) * 100)
+            frames.extend([lbl]*dur)
 
 if __name__ == "__main__":
     main()
