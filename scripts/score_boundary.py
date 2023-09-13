@@ -1,4 +1,19 @@
+import argparse
 import numpy as np
+from pathlib import Path
+import torch
+
+
+def read_segments(fn):
+    with open(fn, "r") as fp:
+        segments = []
+        for line in fp:
+            clusts = list(map(int, line.strip().split()))
+            clusts = torch.tensor(clusts)
+            units, counts = clusts.unique_consecutive(return_counts=True)
+            segments.append(counts[:-1].cumsum(0).numpy())
+    return segments
+
 
 def get_assignments(y, yhat, tolerance=1):
     matches = dict((i, []) for i in range(len(yhat)))
@@ -41,37 +56,15 @@ def get_counts(y, yhat):
 
     return match_counter, dup_counter
 
-
-def process_segment_predictions(
-    hypos,
-    refs,
-    scores,
-    res_files,
-): 
+ 
+def process_predictions(hypos, refs):
     pred_b_len = 0
     b_len = 0
     p_count = 0
     r_count = 0
     p_dup_count = 0
     r_dup_count = 0
-    labels = []
-    for i, (hypo, ref, score) in enumerate(zip(hypos, refs, scores)):
-        hyp_segs = hypo.cumsum(-1)
-        if cfg.margin > 0:
-            score = score.squeeze(-1)
-            skip = (score >= 0.5-cfg.margin) * (score <= 0.5+cfg.margin)
-            hyp_segs[skip] = -1
-        hyp_segs = list(map(str, hyp_segs.cpu().tolist()))
-
-        ref_segs = ref.cumsum(-1).cpu().tolist()
-        ref_segs = list(map(str, ref_segs))
-        
-        to_write = {}
-        to_write[res_files["hypo.segments"]] = " ".join(hyp_segs)
-        to_write[res_files["ref.segments"]] = " ".join(ref_segs)
-
-        yhat = (hypo == 1).nonzero().squeeze(-1).cpu().numpy()
-        y = (ref == 1).nonzero().squeeze(-1).cpu().numpy()
+    for yhat, y in zip(hypos, refs):
         b_len += len(y)
         pred_b_len += len(yhat)
         p, pd = get_counts(y, yhat)
@@ -81,31 +74,76 @@ def process_segment_predictions(
         r_count += r
         r_dup_count += rd
 
-        labels.append(to_write)
-
-    for l in labels:
-        for dest, label in l.items():
-            print(label, file=dest)
-            dest.flush()
-
     return p_count, p_dup_count, r_count, r_dup_count, pred_b_len, b_len
 
 
+def f1(p, r):
+    return 2 * p * r / (p + r) if p + r > 0.0 else 0.0 
 
+def rval(p, r):
+    eps = 1e-8
+    os = r / (p + eps) - 1                                                    
+    r1 = np.sqrt((1 - r) ** 2 + os ** 2)                                                   
+    r2 = (-os + r - 1) / (np.sqrt(2))                                                      
+    rval = 1 - (np.abs(r1) + np.abs(r2)) / 2 
+    return rval
 
-# TODO
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--hyp_file")
+    parser.add_argument("--ref_file")
+    parser.add_argument("--out_file")
+    args = parser.parse_args()
 
-    boundary_precision_harsh = None
-    boundary_recall_harsh = None
-    boundary_precision_lenient = None
-    boundary_recall_lenient = None
-    if gen_result.pred_b_len > 0:
-        boundary_precision_harsh = gen_result.p_count * 100.0 / gen_result.pred_b_len
-        boundary_precision_lenient = (gen_result.p_count + gen_result.p_dup_count) * 100.0 / gen_result.pred_b_len
-        logger.info(f"Boundary precision (harsh): {boundary_precision_harsh}")
-        logger.info(f"Boundary precision (lenient): {boundary_precision_lenient}")
+    hypos = read_segments(args.hyp_file)
+    refs = read_segments(args.ref_file)
+    
+    p_count, p_dup_count, r_count, r_dup_count, pred_b_len, b_len = process_predictions(hypos, refs)
 
-    if gen_result.b_len > 0:
-        boundary_recall_harsh = gen_result.r_count * 100.0 / gen_result.b_len
-        boundary_recall_lenient = (gen_result.r_count + gen_result.r_dup_count) * 100.0 / gen_result.b_len
+    boundary_precision_harsh = 0.0
+    boundary_recall_harsh = 0.0
+    boundary_precision_lenient = 0.0
+    boundary_recall_lenient = 0.0
+    with open(args.out_file, "w") as f_out:
+        if pred_b_len > 0:
+            boundary_precision_harsh = p_count * 100.0 / pred_b_len
+            boundary_precision_lenient = (p_count + p_dup_count) * 100.0 / pred_b_len
+            info = f"Boundary precision (harsh): {boundary_precision_harsh}\n"\
+                   f"Boundary precision (lenient): {boundary_precision_lenient}"
+            print(info)
+            print(info, file=f_out)
 
+        if b_len > 0:
+            boundary_recall_harsh = r_count * 100.0 / b_len
+            boundary_recall_lenient = (r_count + r_dup_count) * 100.0 / b_len
+            info = f"Boundary recall (harsh): {boundary_recall_harsh}\n"\
+                   f"Boundary recall (lenient): {boundary_recall_lenient}"
+            print(info)
+            print(info, file=f_out)
+
+        boundary_f1_harsh = f1(
+            boundary_precision_harsh, boundary_recall_harsh,
+        )
+        boundary_f1_lenient = f1(
+            boundary_precision_lenient, boundary_recall_lenient,
+        )
+        info = f"Boundary F1 (harsh): {boundary_f1_harsh}\n"\
+               f"Boundary F1 (lenient): {boundary_f1_lenient}"
+        print(info)
+        print(info, file=f_out)
+
+        boundary_rval_harsh = rval(
+            boundary_precision_harsh, boundary_recall_harsh,
+        )
+        boundary_rval_lenient = rval(
+            boundary_precision_lenient, boundary_recall_lenient,
+        )
+        info = f"Boundary Rval (harsh): {boundary_rval_harsh}\n"\
+               f"Boundary Rval (lenient): {boundary_rval_lenient}"
+        print(info)
+        print(info, file=f_out)
+
+if __name__ == "__main__":
+    print(rval(0.882,0.764))
+    print(rval(0.908,0.84))
+    #main()
