@@ -1,4 +1,6 @@
 ### Unsupervised Speech Recognition with N-Skipgram and Positional Unigram Matching
+<div align="left"><img src="doc/image/espum.png" width="800"/></div>
+<div align="left"><img src="doc/image/monotonic_aligner.jpg" width="800"/></div>
 <div align="left"><img src="doc/image/asru_pooling_mat.png" width="800"/></div>
 
 # Dependencies
