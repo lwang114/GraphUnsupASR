@@ -31,6 +31,7 @@ from examples.speech_recognition.kaldi.kaldi_decoder import (
     KaldiDecoderConfig,
 )
 
+from dtw import *
 import json
 from pathlib import Path
 import pdb
@@ -65,10 +66,10 @@ class UnpairedAudioTextConfig(FairseqDataclass):
         default=None,
         metadata={"help": "extension of the label file to load, used for fine-tuning"},
     )
-    #aux_target_postfix: Optional[str] = field(
-    #    default=None,
-    #    metadata={"help": "auxaliry target filename extension"},
-    #)
+#    aux_target_postfix: Optional[str] = field(
+#        default=None,
+#        metadata={"help": "auxaliry target filename extension"},
+#    )
     unfiltered: bool = field(
         default=False, metadata={"help": "load data with _unfiltered suffix"}
     )
@@ -451,7 +452,7 @@ class UnpairedAudioText(FairseqTask):
             shuffle=getattr(task_cfg, "shuffle", True),
             sort_by_length=task_cfg.sort_by_length,
             segment_path=segment_path,
-            # aux_target_postfix=task_cfg.aux_target_postfix,
+#            aux_target_postfix=task_cfg.aux_target_postfix,
         )
 
         logger.info(f"split {split} has unpaired text? {has_unpaired_text}")
@@ -478,6 +479,38 @@ class UnpairedAudioText(FairseqTask):
         """Return the :class:`~fairseq.data.Dictionary` for the language
         model."""
         return self._target_dictionary
+
+    def similarity(self, src_embs, tgt_embs, src_lens, tgt_lens):
+        assert src_embs.dim() == tgt_embs.dim() == 3
+        n = src_embs.size(0)
+        S = src_embs.new_zeros(n, n)
+        dist_mats = []
+        alignments = []
+        for src_idx, (src_emb, src_len) in enumerate(zip(src_embs, src_lens)):
+            alignments.append([])
+            dist_mats.append([])
+            for tgt_idx, (tgt_emb, tgt_len) in enumerate(zip(tgt_embs, tgt_lens)):
+                if src_len <= 0 or tgt_len <= 0:
+                    continue
+                dist_mat = - torch.mm(src_emb, tgt_emb.t())
+                dist_mat = dist_mat[:src_len, :tgt_len]
+                alignment = dtw(
+                    dist_mat.cpu().numpy().astype("double")
+                )
+                min_dist = torch.tensor(
+                    alignment.distance
+                )
+                dist_mats[-1].append(
+                    dist_mat.cpu().tolist()
+                )
+                alignments[-1].append(
+                    [
+                        alignment.index1.tolist(), 
+                        alignment.index2.tolist(),
+                    ]
+                )
+                S[src_idx, tgt_idx] = - min_dist
+        return S, dist_mats, alignments
 
     def max_positions(self):
         """Maximum input length supported by the encoder."""

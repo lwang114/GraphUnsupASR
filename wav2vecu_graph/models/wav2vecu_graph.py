@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import Enum, auto
 import math
 import numpy as np
+import json
 from typing import Tuple, List, Optional, Dict
 
 import torch
@@ -29,7 +30,7 @@ class SegmentationType(Enum):
     NONE = auto()
     RANDOM = auto()
     UNIFORM_RANDOM = auto()
-    UNIFORM_RANDOM_JOIN = auto()
+    FIXED = auto()
     JOIN = auto()
     CPC = auto()
     BINARY = auto()
@@ -59,14 +60,18 @@ class SegmentationConfig(FairseqDataclass):
 @dataclass
 class Wav2vecU_GraphConfig(FairseqDataclass):
     gan_type: str = "L1"
-    discriminator_type: str = "mlp"
+    discriminator_type: str = "cnn"
     generator_type: str = "cnn"
     generator_input_type: str = "float"
     reset_discriminator_every_update: bool = False
+    skipgrams: str = ""
     skipgram_size: int = 1
     skipgram_only: bool = False
     position_skipgram: bool = False
     trigram_size: int = 0
+    tri_skipgrams: str = ""
+    _4grams: str = ""
+    _5grams: str = ""
     no_silence: bool = False
     no_special_tokens: bool = False
     
@@ -94,7 +99,10 @@ class Wav2vecU_GraphConfig(FairseqDataclass):
     generator_avg_pool_kernel: int = 0
     generator_avg_pool_stride: int = 1
     
+    quantizer_type: str = "gumbel"
+    quantizer_input_dim: int = 1024
     quantizer_codebook_size: int = 0
+    quantizer_decode_objective: str = "cross_entropy"
     quantizer_weight: float = 1.0
 
     blank_weight: float = 0
@@ -102,6 +110,7 @@ class Wav2vecU_GraphConfig(FairseqDataclass):
     blank_is_sil: bool = False
     no_softmax: bool = False
 
+    pos_unigram_weight: float = 1.0
     smoothness_weight: float = 0.0
     smoothing: float = 0.0
     smoothing_one_sided: bool = False
@@ -109,7 +118,9 @@ class Wav2vecU_GraphConfig(FairseqDataclass):
     probabilistic_grad_penalty_slicing: bool = False
     code_penalty: float = 0.0
     mmi_weight: float = 0.0
+    ctc_weight: float = 0.0
     segment_weight: float = 0.0
+    closeness_weight: float = 0.0
     target_dim: int = 64
     target_downsample_rate: int = 2
     gumbel: bool = False
@@ -180,7 +191,49 @@ class UniformRandomSegmenter(Segmenter):
 
 
 class JoinSegmenter(Segmenter):
-    def logit_segment(self, logits, padding_mask):
+    def logit_segment(self, logits, padding_mask, labels=None):
+        if labels is not None:
+            new_labels = (labels >= 1.0).long().cumsum(-1)
+            
+            if padding_mask.any():
+                new_labels[padding_mask] = -1
+            uniques = []
+
+            bsz, tsz, csz = logits.shape
+
+            for l in new_labels:
+                uniques.append(
+                    l.cpu().unique_consecutive(
+                        return_inverse=True, return_counts=True
+                    )
+                )
+
+            new_tsz = max(u[0].numel() for u in uniques)
+            logits_ = logits.new_zeros(bsz, new_tsz, csz)
+            pad_ = padding_mask.new_zeros(bsz, new_tsz) 
+             
+            for b in range(bsz):
+                u, idx, c = uniques[b]
+                keep = u != -1
+
+                logits_[b].index_add_(
+                    dim=0, index=idx.to(logits_.device), source=logits[b]
+                )
+                logits_[b, : c.numel()] /= c.unsqueeze(-1).to(logits_.device)
+
+                new_sz = keep.sum()
+                if not keep.all():
+                    kept_logits = logits_[b, : c.numel()][keep]
+                    logits_[b, :new_sz] = kept_logits
+
+                if new_sz < new_tsz:
+                    pad = new_tsz - new_sz
+                    logits_[b, -pad:] = 0
+                    pad_[b, -pad:] = True
+
+            logits = logits_
+            padding_mask = pad_
+
         preds = logits.argmax(dim=-1)
 
         if padding_mask.any():
@@ -471,15 +524,57 @@ class BinarySegmenter(Segmenter):
         return new_logits, new_pad
 
 
-class UniformRandomJoinSegmenter(UniformRandomSegmenter, JoinSegmenter):
-    pass
+class FixedSegmenter(Segmenter):
+    def logit_segment(self, logits, padding_mask, labels=None):
+        if labels is not None:
+            new_labels = (labels >= 1.0).long().cumsum(-1)
+            
+            if padding_mask.any():
+                new_labels[padding_mask] = -1
+            uniques = []
+
+            bsz, tsz, csz = logits.shape
+
+            for l in new_labels:
+                uniques.append(
+                    l.cpu().unique_consecutive(
+                        return_inverse=True, return_counts=True
+                    )
+                )
+
+            new_tsz = max(u[0].numel() for u in uniques)
+            logits_ = logits.new_zeros(bsz, new_tsz, csz)
+            pad_ = padding_mask.new_zeros(bsz, new_tsz) 
+             
+            for b in range(bsz):
+                u, idx, c = uniques[b]
+                keep = u != -1
+
+                logits_[b].index_add_(
+                    dim=0, index=idx.to(logits_.device), source=logits[b]
+                )
+                logits_[b, : c.numel()] /= c.unsqueeze(-1).to(logits_.device)
+
+                new_sz = keep.sum()
+                if not keep.all():
+                    kept_logits = logits_[b, : c.numel()][keep]
+                    logits_[b, :new_sz] = kept_logits
+
+                if new_sz < new_tsz:
+                    pad = new_tsz - new_sz
+                    logits_[b, -pad:] = 0
+                    pad_[b, -pad:] = True
+
+            logits = logits_
+            padding_mask = pad_
+        return logits, padding_mask
 
 
 SEGMENT_FACTORY = {
     SegmentationType.NONE: Segmenter,
     SegmentationType.RANDOM: RandomSegmenter,
     SegmentationType.UNIFORM_RANDOM: UniformRandomSegmenter,
-    SegmentationType.UNIFORM_RANDOM_JOIN: UniformRandomJoinSegmenter,
+    SegmentationType.FIXED: FixedSegmenter,
     SegmentationType.JOIN: JoinSegmenter,
     SegmentationType.BINARY: BinarySegmenter,
 }
@@ -673,6 +768,107 @@ class VQEmbeddingEMA(nn.Module):
         return quantized, loss, perplexity
 
 
+class VectorQuantizer(nn.Module):
+    def __init__(self, output_dim, cfg: Wav2vecU_GraphConfig):
+        super().__init__()
+
+        self.cfg = cfg
+        self.codebook_size = cfg.quantizer_codebook_size
+        self.decode_obj = cfg.quantizer_decode_objective
+        self.codebook = VQEmbeddingEMA(self.codebook_size, output_dim)
+        if self.decode_obj == "cross_entropy":
+            self.decoder = nn.Sequential(
+                nn.LayerNorm(output_dim),
+                nn.ReLU(),
+                nn.Linear(output_dim, 512, bias=False),
+                nn.LayerNorm(512),
+                nn.ReLU(),
+                nn.Linear(512, cfg.quantizer_codebook_size, bias=False),
+            )
+        else:
+            self.decoder = nn.Sequential(
+                nn.LayerNorm(output_dim),
+                nn.ReLU(),
+                nn.Linear(512, 512, bias=False),
+                nn.LayerNorm(512),
+                nn.ReLU(),
+                nn.Linear(512, output_dim, bias=False),
+            )
+
+    def forward(self, dense_x, dense_padding_mask, labels):
+        quantized, vq_loss, perplexity = self.codebook(dense_x)
+        out = self.decoder(dense_x)
+        labels[dense_padding_mask] = -1
+        if self.decode_obj == "cross_entropy":
+            recon_loss = F.cross_entropy(
+                out.transpose(1, 2), labels, 
+                ignore_index=-1, 
+                reduction="none",
+            )
+        else:
+            recon_loss = F.mse_loss(
+                out, labels,
+                reduction="none",
+            )
+        loss = recon_loss + vq_loss.sum(-1)
+        result = {
+            "quantized": quantized,
+            "dense_padding_mask": dense_padding_mask,
+            "loss": loss,
+        }
+        return result
+
+    def encode(self, dense_x, dense_padding_mask):
+        quantized, indices = self.codebook.encode(dense_x)
+        result = {
+            "quantized": quantized,
+            "dense_padding_mask": dense_padding_mask,
+            "indices": indices,
+        }
+        return result 
+   
+
+class GumbelQuantizer(nn.Module):
+    def __init__(self, input_dim, cfg: Wav2vecU_GraphConfig):
+        super().__init__()
+
+        self.cfg = cfg
+        self.codebook_size = cfg.quantizer_codebook_size
+        self.hidden_dim = 1024
+        self.encoder = nn.Sequential(
+            nn.Linear(input_dim, self.hidden_dim),
+            nn.ReLU(True),
+            nn.Linear(self.hidden_dim, cfg.quantizer_codebook_size),
+        )
+
+    def forward(self, dense_x, dense_padding_mask, labels=None):
+        logits = self.encoder(dense_x)
+        #h_0 = dense_x.new_zeros(2*self.num_layers, dense_x.size(0), self.hidden_dim)
+        #c_0 = h_0
+        #logits = self.classifier(self.encoder(dense_x, (h_0, c_0))[0])
+        #quantized = F.gumbel_softmax(logits, tau=1, hard=True) 
+        quantized = torch.softmax(logits, dim=-1) 
+        result = {
+            "quantized": quantized,
+            "dense_padding_mask": dense_padding_mask,
+            "indices": quantized.argmax(-1),
+        }
+        if labels is None:
+            return result
+
+        labels[dense_padding_mask] = -1
+        loss = F.cross_entropy(
+            logits.transpose(1, 2), labels,
+            ignore_index=-1,
+            reduction="none",
+        )
+        result["loss"] = loss 
+        return result
+
+    def encode(self, dense_x, dense_padding_mask):
+        return self(dense_x, dense_padding_mask)
+
+
 class Generator(nn.Module):
     def __init__(self, input_dim, output_dim, cfg: Wav2vecU_GraphConfig):
         super().__init__()
@@ -739,7 +935,7 @@ class Generator(nn.Module):
             dense_x = self.pool(
                 dense_x.permute(0, 2, 1)
             ).permute(0, 2, 1)
-            
+        
         if self.stride * self.avg_pool_stride > 1:
             dense_padding_mask = dense_padding_mask[:, :: self.stride*self.avg_pool_stride]
 
@@ -831,11 +1027,22 @@ class Wav2vecU_Graph(BaseFairseqModel):
             self.max_temp * self.temp_decay ** num_updates, self.min_temp
         )
 
+    def quantize_step(self, num_updates):
+        return False #num_updates < 300
+
     def segment_step(self, num_updates):
         return True
 
     def join_segment_step(self, num_updates):
         return False
+
+    def sample_skipsizes(self, k, num_updates):
+        if k == 0:
+            return []
+        skipsizes = [(i, j) for i in range(1, k+1) for j in range(1, k+1)]
+        i = num_updates % k
+        return [skipsizes[(i+j)%k] for j in range(2)]
+        # return skipsizes
 
     def discrim_step(self, num_updates):
         if self.gan_type == "L1":
@@ -843,8 +1050,10 @@ class Wav2vecU_Graph(BaseFairseqModel):
         return num_updates % 2 == 0
 
     def get_groups_for_update(self, num_updates):
-        if self.segment_step(num_updates):
-            return {"generator"}
+        if self.quantize_step(num_updates):
+            return {"quantizer"}
+        elif self.segment_step(num_updates):
+            return {"generator", "quantizer"}
         else:
             return {"discriminator"} if self.discrim_step(num_updates) else {"generator"} 
 
@@ -862,10 +1071,37 @@ class Wav2vecU_Graph(BaseFairseqModel):
         self.skipgram_only = cfg.skipgram_only
         self.position_skipgram = cfg.position_skipgram
         self.tri_size = cfg.trigram_size
+        self.skipgrams = None
+        if cfg.skipgrams:
+            self.skipgrams = json.load(open(cfg.skipgrams))
+            self.skipgrams = {
+                skip: np.asarray(self.skipgrams[skip]) + self.nspecial
+                for skip, y in self.skipgrams.items() 
+            }
+            self.skip_size = len(self.skipgrams)
+        
+        self.tri_skipgrams = None
+        if cfg.tri_skipgrams:
+            self.tri_skipgrams = json.load(open(cfg.tri_skipgrams))
+            self.tri_skipgrams = {
+                skip: np.asarray(self.tri_skipgrams[skip]) + self.nspecial
+                for skip, y in self.tri_skipgrams.items() 
+            }
+            self.tri_size = len(self.tri_skipgrams)
 
+        self._4grams = None
+        if cfg._4grams:
+            self._4grams = np.load(cfg._4grams) + self.nspecial
+
+        self._5grams = None
+        if cfg._5grams:
+            self._5grams = np.load(cfg._5grams) + self.nspecial
+
+        self.pos_unigram_weight = cfg.pos_unigram_weight
         self.smoothness_weight = cfg.smoothness_weight
         self.segment_weight = cfg.segment_weight
         self.quantizer_weight = cfg.quantizer_weight
+        self.closeness_weight = cfg.closeness_weight
 
         output_size = len(target_dict)
         self.pad = target_dict.pad()
@@ -880,6 +1116,7 @@ class Wav2vecU_Graph(BaseFairseqModel):
         self.gradient_penalty = cfg.gradient_penalty
         self.code_penalty = cfg.code_penalty
         self.mmi_weight = cfg.mmi_weight
+        self.ctc_weight = cfg.ctc_weight
         self.blank_weight = cfg.blank_weight
         self.blank_mode = cfg.blank_mode
         self.blank_index = target_dict.index("<SIL>") if cfg.blank_is_sil else 0
@@ -911,15 +1148,16 @@ class Wav2vecU_Graph(BaseFairseqModel):
         self.join_segmenter = JoinSegmenter(cfg.segmentation)
 
         self.generator = Generator(d, output_size, cfg)
+        self.generator_init_weight = None
 
         self.quantizer = None
         if cfg.quantizer_codebook_size > 0:
-            self.quantizer = VQEmbeddingEMA(
-                cfg.quantizer_codebook_size,
-                output_size,
-            )
+            if cfg.quantizer_type == "vq":
+                self.quantizer = VectorQuantizer(cfg.quantizer_input_dim, cfg)
+            else:
+                self.quantizer = GumbelQuantizer(cfg.quantizer_input_dim, cfg) 
             for p in self.quantizer.parameters():
-                p.param_group = "generator"
+                p.param_group = "quantizer"  #"generator"
 
         for p in self.generator.parameters():
             p.param_group = "generator"
@@ -1030,15 +1268,33 @@ class Wav2vecU_Graph(BaseFairseqModel):
             features, padding_mask = self.segmenter.pre_segment(features, padding_mask)
 
         orig_size = features.size(0) * features.size(1) - padding_mask.sum()
-        
-        if clus_features is not None:
-            gen_result = self.generator(clus_features, random_label, padding_mask)
-        else:
-            gen_result = self.generator(features, random_label, padding_mask)
-        
-        orig_dense_x, token_x = gen_result["dense_x"], gen_result["token_x"]
-        orig_dense_padding_mask = gen_result["dense_padding_mask"]
 
+        quantizer_loss = None
+        if self.quantizer is None:
+            if clus_features is not None:
+                gen_result = self.generator(clus_features, random_label, padding_mask)
+                orig_dense_x, token_x = gen_result["dense_x"], gen_result["token_x"]
+            else:
+                gen_result = self.generator(features, random_label, padding_mask)
+                orig_dense_x, token_x = gen_result["dense_x"], gen_result["token_x"]
+        else:
+            if dense_x_only:
+                q_result = self.quantizer.encode(features, padding_mask)
+                quantized = q_result["quantized"]
+            else:
+                clus_labels = clus_features.argmax(-1).long()
+                q_result = self.quantizer(
+                    features, padding_mask, labels=clus_labels,
+                )
+                quantized = q_result["quantized"]
+                q_loss = q_result["loss"]               
+                if self.quantizer_weight > 0:
+                    quantizer_loss = q_loss.sum() * self.quantizer_weight
+ 
+            gen_result = self.generator(quantized, random_label, padding_mask)
+            orig_dense_x, token_x = gen_result["dense_x"], gen_result["token_x"]
+       
+        orig_dense_padding_mask = gen_result["dense_padding_mask"]
         if segment:
             if self.cfg.segmentation.type == SegmentationType.BINARY:
                 if self.join_segment_step(self.update_num):
@@ -1049,6 +1305,10 @@ class Wav2vecU_Graph(BaseFairseqModel):
                     dense_x, dense_padding_mask = self.segmenter.logit_segment(
                         (orig_dense_x, features), orig_dense_padding_mask,
                     )
+            elif self.cfg.segmentation.type in [SegmentationType.FIXED, SegmentationType.JOIN]:
+                dense_x, dense_padding_mask = self.segmenter.logit_segment(
+                    orig_dense_x, orig_dense_padding_mask, labels=bin_labels,
+                )
             else:
                 dense_x, dense_padding_mask = self.segmenter.logit_segment(
                     orig_dense_x, orig_dense_padding_mask,
@@ -1069,32 +1329,20 @@ class Wav2vecU_Graph(BaseFairseqModel):
         if not (self.no_softmax and dense_x_only):
             dense_x, code_perplexity, prob_perplexity = self.normalize(dense_logits)
 
-        quantizer_loss = None
-        if self.quantizer is not None:
-            if not self.no_softmax:
-                if dense_x_only:
-                    dense_x = self.quantizer.encode(dense_x)[0]
-                else:
-                    dense_x, q_loss = self.quantizer(dense_x)[:2]
-                    
-                    if self.quantizer_weight > 0:
-                        quantizer_loss = q_loss.sum() * self.quantizer_weight
-            elif not dense_x_only:
-                dense_x, quantizer_loss = self.quantizer(dense_x)[:2]
-                if self.quantizer_weight > 0:
-                    quantizer_loss = q_loss.sum() * self.quantizer_weight
-
         if dense_x_only:
+            result = {
+                "logits": dense_x,
+                "padding_mask": dense_padding_mask,
+            }
             if self.cfg.segmentation.type == SegmentationType.BINARY:
                 bin_scores = self.segmenter(
                     (orig_dense_x, features), orig_dense_padding_mask
                 )
-                return {
-                    "logits": dense_x,
-                    "padding_mask": dense_padding_mask,
-                    "bin_scores": bin_scores,
-                }
-            return {"logits": dense_x, "padding_mask": dense_padding_mask}
+                result["bin_scores"] = bin_scores
+
+            if self.quantizer is not None:
+                result["quantized_indices"] = q_result["indices"]
+            return result
              
         token_padding_mask = random_label == self.pad
 
@@ -1103,27 +1351,11 @@ class Wav2vecU_Graph(BaseFairseqModel):
         try:
             if dense_x.size(1) > token_x.size(1):
                 gap = dense_x.size(1) - token_x.size(1)
-                pad = dense_x.new_zeros(bsz, gap, dsz)
-                token_x = torch.cat((token_x, pad), dim=1)
-                pad[:, :, self.pad] = 1.0
-                token_padding_mask = torch.cat(
-                    (
-                        token_padding_mask, 
-                        dense_x.new_ones(bsz, gap).bool(),
-                    ), dim=1,
-                )
+                dense_x = dense_x[:, :-gap]
             elif dense_x.size(1) < token_x.size(1):
                 gap = token_x.size(1) - dense_x.size(1)
-                pad = dense_x.new_zeros(bsz, gap, dsz)
-                dense_logits = torch.cat((dense_logits, pad), dim=1)
-                pad[:, :, self.pad] = 1.0
-                dense_x = torch.cat((dense_x, pad), dim=1)
-                dense_padding_mask = torch.cat(
-                    (
-                        dense_padding_mask, 
-                        dense_x.new_ones(bsz, gap).bool(),
-                    ), dim=1,
-                )
+                token_x = token_x[:, :-gap]
+                token_padding_mask = token_padding_mask[:, :-gap]
         except:
             random_label = dense_x.new_zeros(
                 dense_x.size(0), dense_x.size(1),
@@ -1133,19 +1365,29 @@ class Wav2vecU_Graph(BaseFairseqModel):
                 *dense_padding_mask.size(),
             )
             token_padding_mask = dense_padding_mask
+        
         skip_dense_x = []
-        for skip in range(1, self.skip_size+1):
-            if self.position_skipgram:
-                count_dense_x = torch.matmul(
-                    dense_x[:, :-skip].permute(1, 2, 0), 
-                    dense_x[:, skip:].permute(1, 0, 2),
-                )
-            else:
-                count_dense_x = torch.mm(
-                    dense_x[:, :-skip].reshape(-1, dsz).t(), 
-                    dense_x[:, skip:].reshape(-1, dsz),
-                )
-            skip_dense_x.append(count_dense_x)
+        if self.skipgrams is not None:
+            for skip, y in sorted(self.skipgrams.items()):
+                skip = int(skip)
+                count_dense_x = (
+                    dense_x[:, :-skip, y[:, 0]] * dense_x[:, skip:, y[:, 1]]
+                ).sum((0, 1))
+                skip_dense_x.append(count_dense_x)
+        else:
+            for skip in range(1, self.skip_size+1):
+                if self.position_skipgram:
+                    count_dense_x = torch.matmul(
+                        dense_x[:, :-skip].permute(1, 2, 0), 
+                        dense_x[:, skip:].permute(1, 0, 2),
+                    )
+                else:
+                    count_dense_x = torch.mm(
+                        dense_x[:, :-skip].reshape(-1, dsz).t(), 
+                        dense_x[:, skip:].reshape(-1, dsz),
+                    )
+                skip_dense_x.append(count_dense_x)
+
         if self.skip_size > 0:
             skip_dense_x = torch.cat(skip_dense_x).unsqueeze(0)
             skip_dense_padding_mask = dense_x.new_zeros(
@@ -1153,73 +1395,187 @@ class Wav2vecU_Graph(BaseFairseqModel):
             )
 
         # Trigram
-        tri_dense_x = []
-        rws = []
-        for skip in range(1, self.tri_size+1):
-            # Generate a random weight vector 
-            rw = torch.randn(dsz, 1).to(dense_x.device)
-            rw = rw / rw.norm()
-            rws.append(rw)
+        if self.tri_skipgrams is not None:
+            tsz = dense_x.shape[1]
+            tri_dense_x = []
+            for skip, tri_skipgram in sorted(self.tri_skipgrams.items()):
+                skip1, skip2 = map(int, skip.split("_"))
+                tri = []
+                for y in tri_skipgram:
+                    count_dense_x = dense_x[:, :tsz-skip1-skip2, y[0]]
+                    count_dense_x = count_dense_x * dense_x[:, skip1:tsz-skip2, y[1]]
+                    count_dense_x = count_dense_x * dense_x[:, skip1+skip2:, y[2]]
+                    tri.append(count_dense_x.sum())
+                tri_dense_x.append(torch.stack(tri))
+            tri_dense_x = torch.cat(tri_dense_x)
+        else:
+            tri_dense_x = []
+            for skip1, skip2 in self.sample_skipsizes(self.tri_size, self.update_num):
+                # (B x (T - S), D, D)
+                count_dense_x = dense_x[:, :-skip1-skip2].reshape(-1, dsz, 1) * dense_x[:, skip1:-skip2].reshape(-1, 1, dsz)
 
-            # (B x (T - S), 1) 
-            weighted_dense_x = torch.mm(
-                dense_x[:, skip+1:].reshape(-1, dsz), rw,
-            )
-
-            # (B x (T - S), D) 
-            count_dense_x = dense_x[:, :-skip-1].reshape(-1, dsz) * weighted_dense_x
-            
-            # (D, D)
-            count_dense_x = torch.mm(
-                count_dense_x.t(),
-                dense_x[:, skip:-1].reshape(-1, dsz),
-            )
-            tri_dense_x.append(count_dense_x)
-        if self.tri_size > 0:
-            tri_dense_x = torch.cat(tri_dense_x).unsqueeze(0)
-            tri_dense_padding_mask = dense_x.new_zeros(
-                tri_dense_x.size()[:-1],
-            )
+                # (D, D, D)
+                count_dense_x = torch.matmul(
+                    count_dense_x.permute(1, 2, 0),
+                    dense_x[:, skip1+skip2:].reshape(-1, dsz).unsqueeze(0),
+                )
+                tri_dense_x.append(count_dense_x)
+            if self.tri_size > 0:
+                tri_dense_x = torch.cat(tri_dense_x).unsqueeze(0)
+                tri_dense_padding_mask = dense_x.new_zeros(
+                    tri_dense_x.size()[:-1],
+                )
 
         bsz, tsz = random_label.size()
         token_x = token_x * (1 - token_padding_mask.unsqueeze(-1).float())
         skip_token_x = []
-        for skip in range(1, self.skip_size+1): 
-            if self.position_skipgram:
-                count_token_x = torch.matmul(
-                    token_x[:, :-skip].permute(1, 2, 0),
-                    token_x[:, skip:].permute(1, 0, 2),
-                )
-            else:
-                count_token_x = torch.mm(
-                    token_x[:, :-skip].reshape(-1, dsz).t(),
-                    token_x[:, skip:].reshape(-1, dsz),
-                )
-            skip_token_x.append(count_token_x) 
+        if self.skipgrams is not None:
+            for skip, y in sorted(self.skipgrams.items()):
+                skip = int(skip) 
+                count_token_x = (
+                    token_x[:, :-skip, y[:, 0]] * token_x[:, skip:, y[:, 1]]
+                ).sum((0, 1))
+                skip_token_x.append(count_token_x)
+        else:
+            for skip in range(1, self.skip_size+1): 
+                if self.position_skipgram:
+                    count_token_x = torch.matmul(
+                        token_x[:, :-skip].permute(1, 2, 0),
+                        token_x[:, skip:].permute(1, 0, 2),
+                    )
+                else:
+                    count_token_x = torch.mm(
+                        token_x[:, :-skip].reshape(-1, dsz).t(),
+                        token_x[:, skip:].reshape(-1, dsz),
+                    )
+                skip_token_x.append(count_token_x)
+
         if self.skip_size > 0:
             skip_token_x = torch.cat(skip_token_x).unsqueeze(0)       
             skip_token_padding_mask = token_x.new_zeros(
                 skip_token_x.size()[:-1],
             )
 
-        tri_token_x = []
-        for skip in range(1, self.tri_size+1):
-            rw = rws[skip-1]
-            weighted_token_x = torch.mm(
-                token_x[:, skip+1:].reshape(-1, dsz), rw,
-            ) 
-            count_token_x = token_x[:, :-skip-1].reshape(-1, dsz) * weighted_token_x 
-            count_token_x = torch.mm(
-                count_token_x.t(),
-                token_x[:, skip:-1].reshape(-1, dsz),
-            )
-            tri_token_x.append(count_token_x)
-        if self.tri_size > 0:
-            tri_token_x = torch.cat(tri_token_x).unsqueeze(0)
-            tri_token_padding_mask = token_x.new_zeros(
-                tri_token_x.size()[:-1],
-            )
+        if self.tri_skipgrams is not None:
+            tsz = token_x.shape[1]
+            tri_token_x = []
+            for skip, tri_skipgram in sorted(self.tri_skipgrams.items()):
+                skip1, skip2 = map(int, skip.split("_"))
+                tri = []
+                for y in tri_skipgram:
+                    count_token_x = token_x[:, :tsz-skip1-skip2, y[0]]
+                    count_token_x = count_token_x * token_x[:, skip1:tsz-skip2, y[1]]
+                    count_token_x = count_token_x * token_x[:, skip1+skip2:, y[2]]
+                    tri.append(count_token_x.sum())
+                tri_token_x.append(torch.stack(tri))
+            tri_token_x = torch.cat(tri_token_x)
+        else:
+            tri_token_x = []
+            for skip1, skip2 in self.sample_skipsizes(self.tri_size, self.update_num):
+                # (B x (T - S), D, D)
+                count_token_x = token_x[:, :-skip1-skip2].reshape(-1, dsz, 1) * token_x[:, skip1:-skip2].reshape(-1, 1, dsz)
 
+                # (D, D, D)
+                count_token_x = torch.matmul(
+                    count_token_x.permute(1, 2, 0),
+                    token_x[:, skip1+skip2:].reshape(-1, dsz).unsqueeze(0),
+                )
+                tri_token_x.append(count_token_x)
+            if self.tri_size > 0:
+                tri_token_x = torch.cat(tri_token_x).unsqueeze(0)
+                tri_token_padding_mask = token_x.new_zeros(
+                    tri_token_x.size()[:-1],
+                )
+
+        # 4-gram
+        if self._4grams is not None:
+            """
+            y = self._4grams
+            nc = y.shape[0]
+
+            tsz = dense_x.shape[1]
+            _4gram_dense_x = dense_x.new_zeros(nc)
+            for t in range(tsz-3):
+                count_dense_x = dense_x[:, t, y[:, 0]]
+                for i in range(1, 4):
+                    count_dense_x = count_dense_x * dense_x[:, t+i, y[:, i]]
+                _4gram_dense_x = _4gram_dense_x + count_dense_x.sum(0)
+
+            tsz = token_x.shape[1]
+            _4gram_token_x = token_x.new_zeros(nc)
+            for t in range(tsz-3):
+                count_token_x = token_x[:, t, y[:, 0]]
+                for i in range(1, 4):
+                    count_token_x = count_token_x * token_x[:, t+i, y[:, i]]
+                _4gram_token_x = _4gram_token_x + count_token_x.sum(0)
+            """
+
+            tsz = dense_x.shape[1]
+            _4gram_dense_x = []
+            for y in self._4grams:
+                count_dense_x = dense_x[:, :tsz-3, y[0]]
+                for i in range(1, 4):
+                    count_dense_x = count_dense_x * dense_x[:, i:tsz-3+i, y[i]]
+                _4gram_dense_x.append(count_dense_x.sum())
+            _4gram_dense_x = torch.stack(_4gram_dense_x)
+
+            tsz = token_x.shape[1]
+            _4gram_token_x = []
+            for y in self._4grams:
+                count_token_x = token_x[:, :tsz-3, y[0]]
+                for i in range(1, 4):
+                    count_token_x = count_token_x * token_x[:, i:tsz-3+i, y[i]]
+                _4gram_token_x.append(count_token_x.sum())
+            _4gram_token_x = torch.stack(_4gram_token_x)
+
+        # 5-gram
+        if self._5grams is not None:
+            """
+            y = self._5grams
+            nc = y.shape[0]
+
+            tsz = dense_x.shape[1]
+            _5gram_dense_x = dense_x.new_zeros(nc)
+            for t in range(tsz-4):
+                count_dense_x = dense_x[:, t, y[:, 0]]
+                for i in range(1, 5):
+                    count_dense_x = count_dense_x * dense_x[:, t+i, y[:, i]]
+                _5gram_dense_x = _5gram_dense_x + count_dense_x.sum(0)
+
+            tsz = token_x.shape[1]
+            _5gram_token_x = token_x.new_zeros(nc)
+            for t in range(tsz-4):
+                count_token_x = token_x[:, t, y[:, 0]]
+                for i in range(1, 5):
+                    count_token_x = count_token_x * token_x[:, t+i, y[:, i]]
+                _5gram_token_x = _5gram_token_x + count_token_x.sum(0) 
+            """
+
+            bsz, tsz, _ = dense_x.shape
+            _5gram_dense_x = []
+            for y in self._5grams:
+                if tsz < 5:
+                    count_dense_x = dense_x.new_zeros(bsz, tsz)
+                else:
+                    count_dense_x = dense_x[:, :tsz-4, y[0]]
+                    for i in range(1, 5):
+                        count_dense_x = count_dense_x * dense_x[:, i:tsz-4+i, y[i]]  
+                _5gram_dense_x.append(count_dense_x.sum())
+            _5gram_dense_x = torch.stack(_5gram_dense_x)
+
+            tsz = token_x.shape[1]
+            _5gram_token_x = []
+            for y in self._5grams:
+                if tsz < 5:
+                    count_token_x = token_x.new_zeros(bsz, tsz)
+                else:
+                    count_token_x = token_x[:, :tsz-4, y[0]]
+                    for i in range(1, 5):
+                        count_token_x = count_token_x * token_x[:, i:tsz-4+i, y[i]]
+                _5gram_token_x.append(count_token_x.sum())
+            _5gram_token_x = torch.stack(_5gram_token_x)
+
+        q_step = self.quantize_step(self.update_num)
         s_step = self.segment_step(self.update_num)
         d_step = self.discrim_step(self.update_num)
         if d_step and self.reset_discriminator_every_update:
@@ -1249,15 +1605,17 @@ class Wav2vecU_Graph(BaseFairseqModel):
 
         zero_loss = None
         smoothness_loss = None
+        closeness_loss = None
         code_pen = None
         mmi_loss = None
+        ctc_loss = None
         segment_loss = None
+        grad_pen = None
+        loss_token = None
+        loss_dense = None
         if self.gan_type != "L1":
             dense_y = self.discriminator(dense_x, dense_padding_mask > 0)
             token_y = self.discriminator(token_x, token_padding_mask > 0)
-            if self.skip_size > 0:
-                skip_dense_y = self.skip_discriminator(skip_dense_x, skip_dense_padding_mask > 0)
-                skip_token_y = self.skip_discriminator(skip_token_x, skip_token_padding_mask > 0)
         if d_step:
             if self.gan_type == "MMD":
                 loss_dense = torch.mean(dense_y) * sample_size
@@ -1295,16 +1653,17 @@ class Wav2vecU_Graph(BaseFairseqModel):
                 grad_pen = grad_pen.sum() * self.gradient_penalty
             else:
                 grad_pen = None
-        else:
-            grad_pen = None
-            loss_token = None
-            
+        elif not q_step:
             if self.gan_type == "L1":
-                loss_dense = F.l1_loss(dense_x.sum(0), token_x.sum(0), reduction="sum")
+                loss_dense = self.pos_unigram_weight * F.l1_loss(dense_x.sum(0), token_x.sum(0), reduction="sum")
                 if self.skip_size > 0:
                     loss_dense += F.l1_loss(skip_dense_x, skip_token_x, reduction="sum")
                 if self.tri_size > 0:
                     loss_dense += F.l1_loss(tri_dense_x, tri_token_x, reduction="sum")
+                if self._4grams is not None:
+                    loss_dense += 10. * F.l1_loss(_4gram_dense_x, _4gram_token_x, reduction="sum")
+                if self._5grams is not None:
+                    loss_dense += 10. * F.l1_loss(_5gram_dense_x, _5gram_token_x, reduction="sum")
             elif self.gan_type == "MMD":
                 loss_dense = (torch.mean(token_y) - torch.mean(dense_y)) * sample_size
                 if self.skip_size > 0:
@@ -1340,7 +1699,7 @@ class Wav2vecU_Graph(BaseFairseqModel):
                 code_pen = (num_vars - prob_perplexity) / num_vars
                 code_pen = code_pen * sample_size * self.code_penalty
 
-            if self.smoothness_weight > 0:
+            if self.smoothness_weight > 0: 
                 smoothness_loss = F.mse_loss(
                     dense_logits[:, :-1], dense_logits[:, 1:], reduction="none"
                 )
@@ -1349,25 +1708,54 @@ class Wav2vecU_Graph(BaseFairseqModel):
                     smoothness_loss.mean() * sample_size * self.smoothness_weight
                 )
 
+            if self.closeness_weight > 0:
+                if self.generator_init_weight is None:
+                    self.generator_init_weight = [
+                        p.detach().clone() for p in self.generator.parameters()
+                    ]
+                else:
+                    closeness_loss = [
+                        F.mse_loss(p, p_, reduction="mean") * sample_size * self.closeness_weight
+                        for p, p_ in zip(self.generator.parameters(), self.generator_init_weight)
+                    ]
+                    closeness_loss = torch.stack(closeness_loss).sum()
+        
             if (self.mmi_weight > 0) and (aux_target is not None):
-                inter_x = self.decoder(gen_result["inter_x"])
                 if self.target_downsample_rate > 1:
                     aux_target = aux_target[:, :: self.target_downsample_rate]
-                max_t_len = min(aux_target.shape[1], inter_x.shape[1])
+                max_t_len = min(aux_target.shape[1], dense_x.shape[1])
                 mmi_loss = F.cross_entropy(
-                    inter_x[:, :max_t_len].transpose(1, 2),
-                    aux_target[:, :max_t_len],
+                    dense_logits[:, :max_t_len].transpose(1, 2),
+                    aux_target[:, :max_t_len].long(),
                     ignore_index=-1,
                     reduction="none",
                 )
                 mmi_loss = mmi_loss.mean() * mmi_loss.shape[0] * self.mmi_weight
+
+            if (self.ctc_weight > 0) and (aux_target is not None):
+                dense_logprob = orig_dense_x.log_softmax(-1)
+                dense_lengths = (1. - orig_dense_padding_mask.float()).sum(-1).long()
+                aux_tgt_padding_mask = aux_target == self.pad
+                aux_tgt_lengths = (1. - aux_tgt_padding_mask.float()).sum(-1).long()
+
+                ctc_loss = F.ctc_loss(
+                    dense_logprob.transpose(0, 1),
+                    aux_target.long(),
+                    dense_lengths,
+                    aux_tgt_lengths,
+                    blank=self.blank_index,
+                    reduction="none",
+                )
+                ctc_loss = ctc_loss.mean() * ctc_loss.shape[0] * self.ctc_weight
 
         result = {
             "losses": {
                 "grad_pen": grad_pen,
                 "code_pen": code_pen,
                 "smoothness": smoothness_loss,
+                "closeness": closeness_loss,
                 "mmi": mmi_loss,
+                "ctc": ctc_loss,
                 "segment_loss": segment_loss,
                 "quantizer_loss": quantizer_loss,
             },
